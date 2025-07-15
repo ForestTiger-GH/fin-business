@@ -42,7 +42,7 @@ def convert_and_replace_xls_to_xlsx(root_folder):
 
 
 
-def parse_excel_to_df(file_path, level_names):
+def parse_excel_to_df_1(file_path, level_names):
     """
     Парсит Excel-файл в потоковый DataFrame.
 
@@ -168,6 +168,6 @@ def parse_excel_to_df(file_path, level_names):
 
 
 # Пример использования:
-# df = parse_excel_to_df('/content/Оборотно-сальдовая ведомость январь сч26.xlsx',
+# df = parse_excel_to_df_1('/content/Оборотно-сальдовая ведомость январь сч26.xlsx',
 #                        {'account': 'Счёт', 'sublevel': 'Объект', 'detail': 'Статья'})
 # print(df.head(20))
