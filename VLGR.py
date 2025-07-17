@@ -42,7 +42,7 @@ def convert_and_replace_xls_to_xlsx(root_folder):
 
 
 
-def parse_excel_to_df_1(file_path, level_names):
+def excel_parser_STATEMENT(file_path, level_names):
     """
     Парсит Excel-файл в потоковый DataFrame.
 
@@ -171,3 +171,147 @@ def parse_excel_to_df_1(file_path, level_names):
 # df = parse_excel_to_df_1('/content/Оборотно-сальдовая ведомость январь сч26.xlsx',
 #                        {'account': 'Счёт', 'sublevel': 'Объект', 'detail': 'Статья'})
 # print(df.head(20))
+
+
+
+
+
+
+import pandas as pd
+from datetime import datetime, timedelta
+from openpyxl import load_workbook
+
+def excel_parser_INCOME(file_path):
+    """
+    Парсит Excel-файл с анализом выручки в потоковую таблицу.
+
+    - Цвета для группировки:
+        - SECTION_COLOR: светло-зеленый (статья)
+        - COMPANY_COLOR: синий (юр. лицо)
+        - OBJECT_COLOR:  темно-зеленый (объект)
+    - Первый столбец игнорируется, данные со второго.
+    - После парсинга строки 'Итого:' дополнительно размечаются.
+    """
+
+    def get_cell_color(cell):
+        # Универсальный граббер цвета (RGB)
+        return cell.fill.fgColor.rgb if cell.fill.fgColor.type == 'rgb' else None
+
+    def get_next_month_firstday(date_range_str):
+        """
+        Принимает строку диапазона дат и возвращает первое число месяца, следующего за отчетным.
+        Например: '01.01.2025 0:00:00 - 31.01.2025 0:00:00' → '2025-02-01'
+        """
+        if not isinstance(date_range_str, str):
+            return None
+        # Берем вторую дату из строки (после дефиса)
+        parts = date_range_str.split('-')
+        if len(parts) < 2:
+            return None
+        date_str = parts[1].strip().split(' ')[0]  # '31.01.2025'
+        try:
+            dt = datetime.strptime(date_str, '%d.%m.%Y')
+            # Прибавляем один день, получаем 1-е след. месяца
+            next_month = (dt.replace(day=1) + timedelta(days=32)).replace(day=1)
+            return next_month.strftime('%Y-%m-%d')
+        except Exception:
+            return None
+
+    # Цвета
+    SECTION_COLOR = '00E0FFE0'   # светло-зелёный
+    COMPANY_COLOR = '00A6CAF0'   # синий
+    OBJECT_COLOR  = '00C0DCC0'   # тёмно-зелёный
+
+    wb = load_workbook(file_path, data_only=True)
+    ws = wb.active
+
+    # Дата отчета в B3
+    report_date = ws['B3'].value.strip() if ws['B3'].value else None
+
+    # Поиск начала таблицы
+    start_row = None
+    for row in range(1, ws.max_row + 1):
+        if ws.cell(row=row, column=2).value and 'Наименование' in str(ws.cell(row=row, column=2).value):
+            start_row = row + 1
+            break
+    if start_row is None:
+        raise ValueError("Не найдена строка с заголовком 'Наименование'.")
+
+    current_section = None
+    current_company = None
+    current_object = None
+    rows_data = []
+
+    for row in range(start_row, ws.max_row + 1):
+        cell = ws.cell(row=row, column=2)
+        cell_value = cell.value
+        cell_color = get_cell_color(cell)
+
+        if cell_color == SECTION_COLOR:
+            current_section = str(cell_value).strip() if cell_value else None
+            current_company = None
+            current_object = None
+            continue
+        elif cell_color == COMPANY_COLOR:
+            current_company = str(cell_value).strip() if cell_value else None
+            current_object = None
+            continue
+        elif cell_color == OBJECT_COLOR:
+            current_object = str(cell_value).strip() if cell_value else None
+            continue
+
+        # Пропуск пустых строк
+        if not any([ws.cell(row=row, column=col).value for col in range(2, 6)]):
+            continue
+
+        # Основные поля (2-5 столбцы)
+        act_value        = ws.cell(row=row, column=2).value
+        contract_value   = ws.cell(row=row, column=3).value
+        contragent_value = ws.cell(row=row, column=4).value
+        revenue_value    = ws.cell(row=row, column=5).value
+
+        rows_data.append({
+            'Date': report_date,
+            'Category': current_section,
+            'Company': current_company,
+            'Estate': current_object,
+            'Document': act_value,
+            'Contract': contract_value,
+            'Partner': contragent_value,
+            'Value': revenue_value,
+        })
+
+    df = pd.DataFrame(rows_data)
+
+    # Преобразуем дату в нужный формат
+    df = df.rename(columns={'Date': 'Date'})
+    df['Date'] = df['Date'].apply(get_next_month_firstday)
+    df['Date'] = pd.to_datetime(df['Date'])
+
+    # Постобработка: строки 'Итого:'
+    mask_itogo = (df['Document'] == 'Итого:')
+    df.loc[mask_itogo, 'Category'] = 'Итого за месяц'
+    df.loc[mask_itogo, ['Company', 'Estate', 'Document']] = None
+
+    # Финальная чистка от полностью пустых строк
+    df = df.dropna(subset=['Company', 'Document', 'Partner', 'Value'], how='all').reset_index(drop=True)
+
+    # Добавить столбец "Metrik" со значением "Выручка"
+    df['Indicator'] = "Выручка"
+
+    # Перенести столбец Metrik в конец (по умолчанию будет в конце)
+    df = df[['Date', 'Company', 'Estate', 'Indicator', 'Category', 'Partner', 'Contract', 'Document', 'Value']]
+
+    # Преобразовать Value в числовой формат (убрать пробелы, заменить запятую на точку)
+    df['Value'] = (
+        df['Value']
+        .astype(str)
+        .str.replace(' ', '', regex=False)
+        .str.replace(',', '.', regex=False)
+        .replace('nan', None)
+    )
+    df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
+
+    return df
+
+
