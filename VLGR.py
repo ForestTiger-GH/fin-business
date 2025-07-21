@@ -184,51 +184,40 @@ from openpyxl import load_workbook
 def excel_parser_INCOME(file_path):
     """
     Парсит Excel-файл с анализом выручки в потоковую таблицу.
-
-    - Цвета для группировки:
-        - SECTION_COLOR: светло-зеленый (статья)
-        - COMPANY_COLOR: синий (юр. лицо)
-        - OBJECT_COLOR:  темно-зеленый (объект)
-    - Первый столбец игнорируется, данные со второго.
-    - После парсинга строки 'Итого:' дополнительно размечаются.
+    Теперь поддерживает множественные оттенки цвета для секций, компаний и объектов.
     """
 
+    from datetime import datetime, timedelta
+    from openpyxl import load_workbook
+    import pandas as pd
+
     def get_cell_color(cell):
-        # Универсальный граббер цвета (RGB)
-        return cell.fill.fgColor.rgb if cell.fill.fgColor.type == 'rgb' else None
+        return cell.fill.fgColor.rgb if hasattr(cell.fill.fgColor, 'rgb') else None
 
     def get_next_month_firstday(date_range_str):
-        """
-        Принимает строку диапазона дат и возвращает первое число месяца, следующего за отчетным.
-        Например: '01.01.2025 0:00:00 - 31.01.2025 0:00:00' → '2025-02-01'
-        """
         if not isinstance(date_range_str, str):
             return None
-        # Берем вторую дату из строки (после дефиса)
         parts = date_range_str.split('-')
         if len(parts) < 2:
             return None
-        date_str = parts[1].strip().split(' ')[0]  # '31.01.2025'
+        date_str = parts[1].strip().split(' ')[0]
         try:
             dt = datetime.strptime(date_str, '%d.%m.%Y')
-            # Прибавляем один день, получаем 1-е след. месяца
             next_month = (dt.replace(day=1) + timedelta(days=32)).replace(day=1)
             return next_month.strftime('%Y-%m-%d')
         except Exception:
             return None
 
-    # Цвета
-    SECTION_COLOR = '00E0FFE0'   # светло-зелёный
-    COMPANY_COLOR = '00A6CAF0'   # синий
-    OBJECT_COLOR  = '00C0DCC0'   # тёмно-зелёный
+    # ВАРИАНТЫ ЦВЕТОВ (добавьте сюда все оттенки, которые реально встречаются)
+    SECTION_COLORS = ['00E0FFE0', 'FFCCFFCC', '00CCFFCC', '00CFFFD7', None]
+    COMPANY_COLORS = ['00A6CAF0', 'FFB7DEE8', 'FFB7DEE9', None]
+    OBJECT_COLORS  = ['00C0DCC0', 'FF99CC99', 'FF92D050', 'FF00B050', None]
 
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
 
-    # Дата отчета в B3
     report_date = ws['B3'].value.strip() if ws['B3'].value else None
 
-    # Поиск начала таблицы
     start_row = None
     for row in range(1, ws.max_row + 1):
         if ws.cell(row=row, column=2).value and 'Наименование' in str(ws.cell(row=row, column=2).value):
@@ -247,16 +236,17 @@ def excel_parser_INCOME(file_path):
         cell_value = cell.value
         cell_color = get_cell_color(cell)
 
-        if cell_color == SECTION_COLOR:
+        # Сравниваем по спискам цветов:
+        if cell_color in SECTION_COLORS:
             current_section = str(cell_value).strip() if cell_value else None
             current_company = None
             current_object = None
             continue
-        elif cell_color == COMPANY_COLOR:
+        elif cell_color in COMPANY_COLORS:
             current_company = str(cell_value).strip() if cell_value else None
             current_object = None
             continue
-        elif cell_color == OBJECT_COLOR:
+        elif cell_color in OBJECT_COLORS:
             current_object = str(cell_value).strip() if cell_value else None
             continue
 
@@ -283,26 +273,17 @@ def excel_parser_INCOME(file_path):
 
     df = pd.DataFrame(rows_data)
 
-    # Преобразуем дату в нужный формат
-    df = df.rename(columns={'Date': 'Date'})
     df['Date'] = df['Date'].apply(get_next_month_firstday)
     df['Date'] = pd.to_datetime(df['Date'])
 
-    # Постобработка: строки 'Итого:'
     mask_itogo = (df['Document'] == 'Итого:')
     df.loc[mask_itogo, 'Category'] = 'Итого за месяц'
     df.loc[mask_itogo, ['Company', 'Estate', 'Document']] = None
 
-    # Финальная чистка от полностью пустых строк
     df = df.dropna(subset=['Company', 'Document', 'Partner', 'Value'], how='all').reset_index(drop=True)
 
-    # Добавить столбец "Metrik" со значением "Выручка"
     df['Indicator'] = "Выручка"
-
-    # Перенести столбец Metrik в конец (по умолчанию будет в конце)
     df = df[['Date', 'Company', 'Estate', 'Indicator', 'Category', 'Partner', 'Contract', 'Document', 'Value']]
-
-    # Преобразовать Value в числовой формат (убрать пробелы, заменить запятую на точку)
     df['Value'] = (
         df['Value']
         .astype(str)
@@ -313,5 +294,4 @@ def excel_parser_INCOME(file_path):
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
 
     return df
-
 
