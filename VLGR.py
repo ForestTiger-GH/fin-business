@@ -210,8 +210,8 @@ def excel_parser_INCOME(file_path):
 
     # ВАРИАНТЫ ЦВЕТОВ (добавьте сюда все оттенки, которые реально встречаются)
     SECTION_COLORS = ['00E0FFE0', 'FFE0FFE0', 'FFCCFFCC', '00CCFFCC', '00CFFFD7', None]
-    COMPANY_COLORS = ['00A6CAF0', 'FFC0DCC0', 'FFB7DEE8', 'FFB7DEE9', None]
-    OBJECT_COLORS  = ['00C0DCC0', 'FFFFFFC0', 'FF99CC99', 'FF92D050', 'FF00B050', None]
+    COMPANY_COLORS = ['00A6CAF0', 'FFE0FFE0', 'FFB7DEE8', 'FFB7DEE9', None]
+    OBJECT_COLORS  = ['00C0DCC0', 'FFC0DCC0', 'FF99CC99', 'FF92D050', 'FF00B050', None]
 
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
