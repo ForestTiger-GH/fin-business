@@ -295,3 +295,49 @@ def excel_parser_INCOME(file_path):
 
     return df
 
+
+import os
+import glob
+import pandas as pd
+from tqdm import trange
+
+def parse_income_folder(root_main, root_income, parser_func):
+    """
+    Проходит по всем .xlsx-файлам во вложенных каталогах, парсит их заданной функцией и объединяет в один DataFrame.
+
+    Аргументы:
+        root_main   (str): Корневая папка, например '/content/gdrive/MyDrive/Волгоград'
+        root_income (str): Подкаталог выручки, например 'Выручка'
+        parser_func (callable): Функция-парсер одного файла (например, VLGR.excel_parser_INCOME)
+
+    Возвращает:
+        pd.DataFrame: Общий потоковый DataFrame по всем найденным выгрузкам
+    """
+
+    # Формируем абсолютный путь к каталогу с выгрузками
+    base_dir = os.path.join(root_main, root_income)
+
+    # Рекурсивный поиск всех .xlsx файлов во всех вложенных папках
+    all_files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
+
+    print(f'Найдено файлов: {len(all_files)}')
+
+    all_data = []
+
+    # Проходим по всем найденным файлам с прогресс-баром
+    for i in trange(len(all_files), desc="Парсинг файлов", unit="файл"):
+        file = all_files[i]
+        try:
+            df = parser_func(file)
+            # df['SOURCE_FILE'] = os.path.basename(file)  # можно добавить имя файла в итоговую таблицу
+            all_data.append(df)
+        except Exception as e:
+            print(f'Ошибка при парсинге файла {file}: {e}')
+
+    # Объединяем все DataFrame в один
+    if all_data:
+        df_all = pd.concat(all_data, ignore_index=True)
+    else:
+        df_all = pd.DataFrame()
+
+    return df_all
