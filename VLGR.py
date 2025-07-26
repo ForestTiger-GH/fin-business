@@ -136,7 +136,14 @@ def excel_parser_STATEMENT(file_path):
                         'Value': cell_data
                     })
 
-    return pd.DataFrame(rows_data)
+    df = pd.DataFrame(rows_data)
+    # Универсальное переименование столбцов по словарю
+    rename_dict = {
+        'Контрагенты': 'Partner',
+        'Договоры': 'Contract'
+    }
+    df = df.rename(columns=rename_dict)
+    return df
 
 # # Пример использования
 # df = excel_parser_STATEMENT('/content/ОСВ 76 февраль 2025.xlsx')
