@@ -243,7 +243,7 @@ def excel_parser_STATEMENT(file_path):
         df.loc[mask_itogo, 'Category'] = df.loc[mask_itogo, 'Счет']
         df.loc[mask_itogo, 'Счет'] = account_value
 
-    # Желаемый порядок столбцов
+    # Желаемый порядок столбцов --------------------------------------
     desired_order = [
         'Date', 'Company', 'Estate', 'Type', 'Category', 
         'Partner', 'Contract', 'Document', 'Value'
@@ -431,7 +431,23 @@ def parse_statement_folder(root_main, root_statement, parser_func):
     else:
         df_all = pd.DataFrame()
 
-    return df_all
+    # Желаемый порядок столбцов --------------------------------------
+    desired_order = [
+        'Date', 'Company', 'Estate', 'Type', 'Category', 
+        'Partner', 'Contract', 'Document', 'Value'
+    ]
+
+    df = df_all
+    # Сначала берем те, которые есть, в нужном порядке
+    columns_in_order = [col for col in desired_order if col in df.columns]
+    # Потом добавляем остальные, которых нет в последовательности
+    other_columns = [col for col in df.columns if col not in columns_in_order]
+    # Итоговый порядок
+    final_order = columns_in_order + other_columns
+    # Переупорядочиваем DataFrame
+    df = df[final_order]
+    
+    return df
 
 
 def parse_income_folder(root_main, root_income, parser_func):
