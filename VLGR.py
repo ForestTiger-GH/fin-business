@@ -159,6 +159,12 @@ def excel_parser_STATEMENT(file_path):
 
     df = pd.DataFrame(rows_data)
 
+    # -----------------------------
+    if 'Счет, Наименование счета' in df.columns:
+        df = df.rename(columns={'Счет, Наименование счета': 'Счет'})
+        df['Счет'] = df['Счет'].astype(str).str.split(',', n=1).str[0].str.strip()
+    # -----------------------------
+
     # После создания df
     # 1. Определяем столбцы уровней
     account_col = level_names['account']
@@ -207,6 +213,7 @@ def excel_parser_STATEMENT(file_path):
         'Подразделение': 'Estate',
         'Статьи движения денежных средств': 'Category',
         'Статьи затрат': 'Category',
+        'Банковские счета': 'Bank Account',
         'Period': 'Date'
     }
     df = df.rename(columns=rename_dict)
