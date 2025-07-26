@@ -184,7 +184,9 @@ def excel_parser_STATEMENT(file_path):
     rename_dict = {
         'Контрагенты': 'Partner',
         'Договоры': 'Contract',
+        'Подразделение': 'Estate',
         'Статьи движения денежных средств': 'Category',
+        'Статьи затрат': 'Category',
         'Period': 'Date'
     }
     df = df.rename(columns=rename_dict)
