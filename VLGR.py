@@ -246,7 +246,7 @@ def excel_parser_STATEMENT(file_path):
     # Желаемый порядок столбцов --------------------------------------
     desired_order = [
         'Date', 'Company', 'Estate', 'Type', 'Category', 
-        'Partner', 'Contract', 'Document', 'Value'
+        'Partner', 'Contract', 'Document', 'Bank Account', 'Value'
     ]
     # Сначала берем те, которые есть, в нужном порядке
     columns_in_order = [col for col in desired_order if col in df.columns]
@@ -434,7 +434,7 @@ def parse_statement_folder(root_main, root_statement, parser_func):
     # Желаемый порядок столбцов --------------------------------------
     desired_order = [
         'Date', 'Company', 'Estate', 'Type', 'Category', 
-        'Partner', 'Contract', 'Document', 'Value'
+        'Partner', 'Contract', 'Document', 'Bank Account', 'Value'
     ]
 
     df = df_all
