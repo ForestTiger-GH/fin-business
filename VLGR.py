@@ -191,31 +191,29 @@ def excel_parser_STATEMENT(file_path):
     }
     df = df.rename(columns=rename_dict)
 
+    # 1. Добавить столбец Category, если его нет
+    if 'Category' not in df.columns:
+        df['Category'] = None
+    
+    # 2. Перенести все значения из "Счет" с "итого" в "Category", а в "Счет" — оставить пусто
+    if 'Счет' in df.columns:
+        mask_itogo = df['Счет'].astype(str).str.lower().str.contains('итого', na=False)
+        df.loc[mask_itogo, 'Category'] = df.loc[mask_itogo, 'Счет']
+        df.loc[mask_itogo, 'Счет'] = None
+
     # Желаемый порядок столбцов
     desired_order = [
         'Date', 'Company', 'Estate', 'Indicator', 'Category', 
         'Partner', 'Contract', 'Document', 'Value'
     ]
-    
     # Сначала берем те, которые есть, в нужном порядке
     columns_in_order = [col for col in desired_order if col in df.columns]
     # Потом добавляем остальные, которых нет в последовательности
     other_columns = [col for col in df.columns if col not in columns_in_order]
     # Итоговый порядок
     final_order = columns_in_order + other_columns
-    
     # Переупорядочиваем DataFrame
     df = df[final_order]
-
-    # 1. Добавить столбец Category, если его нет
-    if 'Category' not in df.columns:
-        df['Category'] = ''
-    
-    # 2. Перенести все значения из "Счет" с "итого" в "Category", а в "Счет" — оставить пусто
-    if 'Счет' in df.columns:
-        mask_itogo = df['Счет'].astype(str).str.lower().str.contains('итого', na=False)
-        df.loc[mask_itogo, 'Category'] = df.loc[mask_itogo, 'Счет']
-        df.loc[mask_itogo, 'Счет'] = ''
     
     return df
 
