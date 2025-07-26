@@ -102,7 +102,7 @@ def excel_parser_STATEMENT(file_path):
                     rows_data.append({
                         'Company': company_name,
                         'Period': date_info,
-                        level_names['account']: 'Итого',
+                        level_names['account']: cell_value,  # сохраняем точное название итога
                         level_names['sublevel']: None,
                         level_names['detail']: None,
                         'Показатель': indicator,
