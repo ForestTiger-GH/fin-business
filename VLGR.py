@@ -206,6 +206,16 @@ def excel_parser_STATEMENT(file_path):
     
     # Переупорядочиваем DataFrame
     df = df[final_order]
+
+    # 1. Добавить столбец Category, если его нет
+    if 'Category' not in df.columns:
+        df['Category'] = ''
+    
+    # 2. Перенести все значения из "Счет" с "итого" в "Category", а в "Счет" — оставить пусто
+    if 'Счет' in df.columns:
+        mask_itogo = df['Счет'].astype(str).str.lower().str.contains('итого', na=False)
+        df.loc[mask_itogo, 'Category'] = df.loc[mask_itogo, 'Счет']
+        df.loc[mask_itogo, 'Счет'] = ''
     
     return df
 
