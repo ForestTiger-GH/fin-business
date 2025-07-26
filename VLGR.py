@@ -238,7 +238,7 @@ def excel_parser_STATEMENT(file_path):
 
     # Желаемый порядок столбцов
     desired_order = [
-        'Date', 'Company', 'Estate', 'Indicator', 'Category', 
+        'Date', 'Company', 'Estate', 'Type', 'Category', 
         'Partner', 'Contract', 'Document', 'Value'
     ]
     # Сначала берем те, которые есть, в нужном порядке
