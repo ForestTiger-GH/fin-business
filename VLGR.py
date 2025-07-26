@@ -42,18 +42,12 @@ def convert_and_replace_xls_to_xlsx(root_folder):
 
 
 
-def excel_parser_STATEMENT(file_path, level_names):
+def excel_parser_STATEMENT(file_path):
     """
     Парсит Excel-файл в потоковый DataFrame.
 
     Параметры:
     - file_path: str, путь к файлу Excel
-    - level_names: dict, наименования уровней иерархии, например:
-      {
-          'account': 'Наименование счета',
-          'sublevel': 'Подразделение',
-          'detail': 'Статья затрат'
-      }
 
     Возвращает:
     - DataFrame с потоковой структурой данных
@@ -61,13 +55,19 @@ def excel_parser_STATEMENT(file_path, level_names):
     def extract_month_year(text):
         match = re.search(r'([А-ЯЁа-яё]+)\s+(\d{4})', text)
         return f"{match.group(1)} {match.group(2)}" if match else text
-    
-    
+
     def get_cell_color(cell):
-        return cell.fill.start_color.index if cell.fill.start_color.index else None
-    
+        return cell.fill.start_color.rgb if cell.fill.start_color else None
+
     wb = load_workbook(file_path, data_only=True)
     sheet = wb.active
+
+    # Автоматическое формирование маски из ячеек A6, A7
+    level_names = {
+        'account': sheet['A6'].value if sheet['A6'].value else None,
+        'sublevel': sheet['A7'].value if sheet['A7'].value else None,
+        'detail': sheet['A8'].value if sheet['A8'].value else None,
+    }
 
     company_name = sheet['A1'].value.strip()
     date_info = extract_month_year(sheet['A2'].value.strip())
@@ -112,24 +112,15 @@ def excel_parser_STATEMENT(file_path, level_names):
 
         if cell_color == 'FFE4F0DD':
             current_account = cell_value
-            for col_idx in range(2, 8):
-                cell_data = sheet.cell(row=row, column=col_idx).value
-                if cell_data not in (None, ''):
-                    indicator, debit_credit = columns_mapping[col_idx]
-                    rows_data.append({
-                        'Компания': company_name,
-                        'Период': date_info,
-                        level_names['account']: current_account,
-                        level_names['sublevel']: None,
-                        level_names['detail']: None,
-                        'Показатель': indicator,
-                        'Дебет/Кредит': debit_credit,
-                        'Значение': cell_data
-                    })
+            current_sublevel = None
+
+        elif cell_color == 'FFF0F6EF':
+            current_sublevel = cell_value
+
+        elif cell_color == 'FFD6E5CB':
             continue
 
-        if cell_color == 'FFF0F6EF':
-            current_sublevel = cell_value
+        else:
             for col_idx in range(2, 8):
                 cell_data = sheet.cell(row=row, column=col_idx).value
                 if cell_data not in (None, ''):
@@ -139,38 +130,17 @@ def excel_parser_STATEMENT(file_path, level_names):
                         'Период': date_info,
                         level_names['account']: current_account,
                         level_names['sublevel']: current_sublevel,
-                        level_names['detail']: None,
+                        level_names['detail']: cell_value,
                         'Показатель': indicator,
                         'Дебет/Кредит': debit_credit,
                         'Значение': cell_data
                     })
-            continue
-
-        if cell_color == 'FFD6E5CB':
-            continue
-
-        for col_idx in range(2, 8):
-            cell_data = sheet.cell(row=row, column=col_idx).value
-            if cell_data not in (None, ''):
-                indicator, debit_credit = columns_mapping[col_idx]
-                rows_data.append({
-                    'Компания': company_name,
-                    'Период': date_info,
-                    level_names['account']: current_account,
-                    level_names['sublevel']: current_sublevel,
-                    level_names['detail']: cell_value,
-                    'Показатель': indicator,
-                    'Дебет/Кредит': debit_credit,
-                    'Значение': cell_data
-                })
 
     return pd.DataFrame(rows_data)
 
-
-# Пример использования:
-# df = parse_excel_to_df_1('/content/Оборотно-сальдовая ведомость январь сч26.xlsx',
-#                        {'account': 'Счёт', 'sublevel': 'Объект', 'detail': 'Статья'})
-# print(df.head(20))
+# # Пример использования
+# df = excel_parser_STATEMENT('/content/ОСВ 76 февраль 2025.xlsx')
+# df
 
 
 
