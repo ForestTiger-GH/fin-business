@@ -159,7 +159,8 @@ def excel_parser_STATEMENT(file_path):
     # Универсальное переименование столбцов по словарю
     rename_dict = {
         'Контрагенты': 'Partner',
-        'Договоры': 'Contract'
+        'Договоры': 'Contract',
+        'Статьи движения денежных средств' : 'Category'
     }
     df = df.rename(columns=rename_dict)
 
