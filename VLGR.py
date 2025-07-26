@@ -218,14 +218,17 @@ def excel_parser_STATEMENT(file_path):
     # 2. Перенести все значения из "Счет" с "итого" в "Category", а в "Счет" — оставить пусто
     if 'Счет' in df.columns:
         mask_itogo = df['Счет'].astype(str).str.lower().str.contains('итого', na=False)
-        # Считаем уникальные значения по всему столбцу Счет (без nan и без "итого")
-        unique_accounts = df.loc[~mask_itogo, 'Счет'].dropna().unique()
-        # Если одно уникальное — использовать его для строк "итого", иначе оставить пусто
+        unique_accounts = df.loc[~mask_itogo, 'Счет'].dropna().astype(str).unique()
+        # Если одно уникальное — используем его
         if len(unique_accounts) == 1:
             account_value = unique_accounts[0]
+        # Если среди уникальных есть '76' — используем его
+        elif '76' in unique_accounts:
+            account_value = '76'
+        # Если ни одно из условий не сработало — пусто
         else:
             account_value = None
-        # Вставляем итоговые значения в Category и корректируем Счет
+        # Заполняем для строк "итого"
         df.loc[mask_itogo, 'Category'] = df.loc[mask_itogo, 'Счет']
         df.loc[mask_itogo, 'Счет'] = account_value
 
