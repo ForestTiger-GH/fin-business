@@ -156,15 +156,6 @@ def excel_parser_STATEMENT(file_path):
             # Удаляем пустой столбец
             df = df.drop(columns=[empty_col])
     
-    # Универсальное переименование столбцов по словарю
-    rename_dict = {
-        'Контрагенты': 'Partner',
-        'Договоры': 'Contract',
-        'Статьи движения денежных средств' : 'Category'
-    }
-    df = df.rename(columns=rename_dict)
-
-
     def next_month_date(period_text):
         months = {
             'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6,
@@ -188,6 +179,15 @@ def excel_parser_STATEMENT(file_path):
         return period_text
     
     df['Period'] = pd.to_datetime(df['Period'].apply(next_month_date))
+
+    # Универсальное переименование столбцов по словарю
+    rename_dict = {
+        'Контрагенты': 'Partner',
+        'Договоры': 'Contract',
+        'Статьи движения денежных средств' : 'Category',
+        'Period' = 'Date'
+    }
+    df = df.rename(columns=rename_dict)
     
     return df
 
