@@ -377,7 +377,14 @@ def excel_parser_INCOME(file_path):
     )
     df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
 
+    # Если Company содержит только одно уникальное значение (не пустое), подставить его вместо пустых
+    unique_companies = df['Company'].dropna().unique()
+    if len(unique_companies) == 1:
+        single_company = unique_companies[0]
+        df['Company'] = df['Company'].fillna(single_company)
+
     return df
+
 
 
 import os
