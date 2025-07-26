@@ -126,14 +126,14 @@ def excel_parser_STATEMENT(file_path):
                 if cell_data not in (None, ''):
                     indicator, debit_credit = columns_mapping[col_idx]
                     rows_data.append({
-                        'Компания': company_name,
-                        'Период': date_info,
+                        'Company': company_name,
+                        'Period': date_info,
                         level_names['account']: current_account,
                         level_names['sublevel']: current_sublevel,
                         level_names['detail']: cell_value,
                         'Показатель': indicator,
                         'Дебет/Кредит': debit_credit,
-                        'Значение': cell_data
+                        'Value': cell_data
                     })
 
     return pd.DataFrame(rows_data)
