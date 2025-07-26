@@ -5,6 +5,7 @@ from tqdm.notebook import trange
 import pandas as pd
 import re
 from openpyxl import load_workbook
+import calendar
 
 def convert_and_replace_xls_to_xlsx(root_folder):
     """
@@ -161,6 +162,34 @@ def excel_parser_STATEMENT(file_path):
         'Договоры': 'Contract'
     }
     df = df.rename(columns=rename_dict)
+
+
+    def next_month_date(period_text):
+        # Находим месяц и год по-русски
+        months = {
+            'январь': 1, 'февраль': 2, 'март': 3, 'апрель': 4, 'май': 5, 'июнь': 6,
+            'июль': 7, 'август': 8, 'сентябрь': 9, 'октябрь': 10, 'ноябрь': 11, 'декабрь': 12
+        }
+        match = re.match(r'([А-ЯЁа-яё]+)\\s*(\\d{4})', period_text.strip())
+        if match:
+            month_name = match.group(1).lower()
+            year = int(match.group(2))
+            month = months.get(month_name, 0)
+            if month == 0:
+                return period_text  # если не найден месяц — не трогаем
+            # вычисляем следующий месяц и год
+            if month == 12:
+                next_month = 1
+                next_year = year + 1
+            else:
+                next_month = month + 1
+                next_year = year
+            return f"01.{next_month:02d}.{next_year}"
+        return period_text
+    
+    # Применяем к столбцу Period
+    df['Period'] = df['Period'].apply(next_month_date)
+    
     return df
 
 # # Пример использования
