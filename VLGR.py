@@ -569,5 +569,5 @@ def normalize_company_name(name):
 
 def normalize_company_names(val):
     if pd.isnull(val) or str(val).strip() == None:
-        return ''
+        return None
     return normalize_company_name(str(val))
