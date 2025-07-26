@@ -137,6 +137,24 @@ def excel_parser_STATEMENT(file_path):
                     })
 
     df = pd.DataFrame(rows_data)
+
+    # После создания df
+    # 1. Определяем столбцы уровней
+    account_col = level_names['account']
+    sublevel_col = level_names['sublevel']
+    detail_col = level_names['detail']
+    
+    # 2. Если detail_col нет (None или пустой), а sublevel_col есть — ищем столбец без имени
+    if not detail_col and sublevel_col:
+        # Находим столбец с пустым заголовком (None или ''), если он есть
+        empty_cols = [col for col in df.columns if not col]
+        if empty_cols:
+            empty_col = empty_cols[0]
+            # Переносим данные в sublevel_col
+            df[sublevel_col] = df[sublevel_col].combine_first(df[empty_col])
+            # Удаляем пустой столбец
+            df = df.drop(columns=[empty_col])
+    
     # Универсальное переименование столбцов по словарю
     rename_dict = {
         'Контрагенты': 'Partner',
