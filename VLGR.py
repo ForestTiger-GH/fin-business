@@ -94,7 +94,7 @@ def excel_parser_STATEMENT(file_path):
         cell_value = cell.value
         cell_color = get_cell_color(cell)
 
-        if cell_color == 'FFD6E5CB' and (cell_value is not None and str(cell_value).strip().lower() == 'итого'):
+        if cell_color == 'FFD6E5CB' and (cell_value is not None and 'итого' in str(cell_value).strip().lower()):
             for col_idx in range(2, 8):
                 cell_data = sheet.cell(row=row, column=col_idx).value
                 if cell_data not in (None, ''):
