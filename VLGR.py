@@ -490,3 +490,80 @@ def parse_income_folder(root_main, root_income, parser_func):
         df_all = pd.DataFrame()
 
     return df_all
+
+
+
+
+
+
+
+
+
+
+
+def normalize_company_name(name):
+    opf_list = ['АНО ДПО', 'ООО', 'ЗАО', 'ОАО', 'НПО', 'АО', 'ПАО', 'ФГБУ', 'УФССП', 'УФФССП', 'КПК', 'ОСФР', 'УФК', 'НО']
+    opf_pattern = '|'.join(sorted(opf_list, key=len, reverse=True))
+
+    # Убираем лишние символы, стандартизируем кавычки
+    name_clean = name.strip().replace('«', '"').replace('»', '"').replace('.', '. ').strip()
+    name_clean = re.sub(r'\s+', ' ', name_clean)
+
+    upper = name_clean.upper()
+
+    # 1. ИП — CAPS, "ИП" в начале
+    if re.search(r'\bИП\b', upper):
+        ip_match = re.search(r'\bИП\b', upper)
+        if ip_match.start() == 0:
+            fio = name_clean[ip_match.end():].strip()
+        else:
+            fio = name_clean[:ip_match.start()].strip()
+        fio = re.sub(r'\.', '', fio)
+        fio = re.sub(r'\s+', ' ', fio).upper()
+        result = f'ИП {fio}'
+
+    # 2. Юрлицо с ОПФ — CAPS, ОПФ в начале
+    elif (opf_match := re.search(r'\b(' + opf_pattern + r')\b', upper)):
+        opf = opf_match.group(1)
+        # Убираем ОПФ из исходного названия
+        cleaned = re.sub(r'\b(' + opf_pattern + r')\b', '', upper)
+        cleaned = cleaned.replace('"', '').replace('.', ' ').strip()
+        result = f'{opf} {cleaned}'
+
+    else:
+        # 3. Сокращенные ФИО (Фамилия И.О.)
+        fio_match = re.match(r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.\s*([А-ЯЁа-яё])\.$', name_clean)
+        fio_match_single_dot = re.match(r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.([А-ЯЁа-яё])\.$', name_clean)
+        fio_match_separated = re.match(r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.\s+([А-ЯЁа-яё])\.$', name_clean)
+
+        if fio_match or fio_match_single_dot or fio_match_separated:
+            fio_groups = fio_match or fio_match_single_dot or fio_match_separated
+            surname = fio_groups.group(1).title()
+            initials = f"{fio_groups.group(2).upper()}.{fio_groups.group(3).upper()}."
+            result = f"{surname} {initials}"
+
+        # 4. Сокращенные ФИО (Фамилия И.О без одной точки)
+        elif (fio_match_alt := re.match(r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.([А-ЯЁа-яё])$', name_clean)):
+            surname = fio_match_alt.group(1).title()
+            initials = f"{fio_match_alt.group(2).upper()}.{fio_match_alt.group(3).upper()}."
+            result = f"{surname} {initials}"
+
+        # 5. Фамилия с одной буквой-инициалом (Фамилия И.)
+        elif (single_init_match := re.match(r'^([А-ЯЁа-яё]+)\s+([А-ЯЁа-яё])\.$', name_clean)):
+            surname = single_init_match.group(1).title()
+            initial = f"{single_init_match.group(2).upper()}."
+            result = f"{surname} {initial}"
+
+        # 6. Полное ФИО (2+ слов) каждое слово с большой буквы
+        elif len(name_clean.split()) >= 2:
+            result = name_clean.title()
+
+        # 7. Все остальные случаи — CAPS
+        else:
+            result = upper
+
+    # Финальная чистка пробелов
+    result = re.sub(r'\s+', ' ', result).strip()
+
+    return result
+
