@@ -392,6 +392,41 @@ import glob
 import pandas as pd
 from tqdm import trange
 
+def parse_statement_folder(root_main, root_statement, parser_func):
+    """
+    Обрабатывает все .xlsx-файлы ОСВ/ведомостей во вложенных папках, объединяет их в единый DataFrame.
+
+    Аргументы:
+        root_main     (str): Корневая папка, например '/content/gdrive/MyDrive/Волгоград'
+        root_statement(str): Подкаталог ведомостей, например 'Ведомость'
+        parser_func (callable): Функция-парсер одного файла (например, VLGR.excel_parser_STATEMENT)
+
+    Возвращает:
+        pd.DataFrame: Общий потоковый DataFrame по всем найденным ведомостям
+    """
+    base_dir = os.path.join(root_main, root_statement)
+    all_files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
+
+    print(f'Найдено файлов: {len(all_files)}')
+
+    all_data = []
+    for i in trange(len(all_files), desc="Парсинг файлов", unit="файл"):
+        file = all_files[i]
+        try:
+            df = parser_func(file)
+            # df['SOURCE_FILE'] = os.path.basename(file)  # если нужно имя файла
+            all_data.append(df)
+        except Exception as e:
+            print(f'Ошибка при парсинге файла {file}: {e}')
+
+    if all_data:
+        df_all = pd.concat(all_data, ignore_index=True)
+    else:
+        df_all = pd.DataFrame()
+
+    return df_all
+
+
 def parse_income_folder(root_main, root_income, parser_func):
     """
     Проходит по всем .xlsx-файлам во вложенных каталогах, парсит их заданной функцией и объединяет в один DataFrame.
