@@ -211,9 +211,13 @@ def excel_parser_STATEMENT(file_path):
     }
     df = df.rename(columns=rename_dict)
 
-    # 1. Добавить столбец Category, если его нет
+    # 1. Добавить столбец если его нет
     if 'Category' not in df.columns:
         df['Category'] = None
+    if 'Type' not in df.columns:
+        df['Type'] = None
+    if 'Document' not in df.columns:
+        df['Document'] = None
     
     # 2. Перенести все значения из "Счет" с "итого" в "Category", а в "Счет" — оставить пусто
     if 'Счет' in df.columns:
@@ -362,8 +366,8 @@ def excel_parser_INCOME(file_path):
 
     df = df.dropna(subset=['Company', 'Document', 'Partner', 'Value'], how='all').reset_index(drop=True)
 
-    df['Indicator'] = "Выручка"
-    df = df[['Date', 'Company', 'Estate', 'Indicator', 'Category', 'Partner', 'Contract', 'Document', 'Value']]
+    df['Type'] = "Доход"
+    df = df[['Date', 'Company', 'Estate', 'Type', 'Category', 'Partner', 'Contract', 'Document', 'Value']]
     df['Value'] = (
         df['Value']
         .astype(str)
