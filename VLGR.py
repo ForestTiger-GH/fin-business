@@ -111,9 +111,29 @@ def excel_parser_STATEMENT(file_path):
                     })
             continue
 
+        # if cell_color == 'FFE4F0DD':
+        #     current_account = cell_value
+        #     current_sublevel = None
+            
         if cell_color == 'FFE4F0DD':
             current_account = cell_value
             current_sublevel = None
+            # Добавляем агрегатную строку, если есть значения!
+            for col_idx in range(2, 8):
+                cell_data = sheet.cell(row=row, column=col_idx).value
+                if cell_data not in (None, ''):
+                    indicator, debit_credit = columns_mapping[col_idx]
+                    rows_data.append({
+                        'Company': company_name,
+                        'Period': date_info,
+                        level_names['account']: current_account,
+                        level_names['sublevel']: None,
+                        level_names['detail']: None,
+                        'Показатель': indicator,
+                        'Дебет/Кредит': debit_credit,
+                        'Value': cell_data
+                    })
+            continue
 
         elif cell_color == 'FFF0F6EF':
             current_sublevel = cell_value
