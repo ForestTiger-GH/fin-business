@@ -188,6 +188,22 @@ def excel_parser_STATEMENT(file_path):
         'Period': 'Date'
     }
     df = df.rename(columns=rename_dict)
+
+    # Желаемый порядок столбцов
+    desired_order = [
+        'Date', 'Company', 'Estate', 'Indicator', 'Category', 
+        'Partner', 'Contract', 'Document', 'Value'
+    ]
+    
+    # Сначала берем те, которые есть, в нужном порядке
+    columns_in_order = [col for col in desired_order if col in df.columns]
+    # Потом добавляем остальные, которых нет в последовательности
+    other_columns = [col for col in df.columns if col not in columns_in_order]
+    # Итоговый порядок
+    final_order = columns_in_order + other_columns
+    
+    # Переупорядочиваем DataFrame
+    df = df[final_order]
     
     return df
 
