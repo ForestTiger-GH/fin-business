@@ -373,7 +373,7 @@ def excel_parser_INCOME(file_path):
 
     df = df.dropna(subset=['Company', 'Document', 'Partner', 'Value'], how='all').reset_index(drop=True)
 
-    df['Type'] = "Доход"
+    df['Type'] = "Доходы"
     df = df[['Date', 'Company', 'Estate', 'Type', 'Category', 'Partner', 'Contract', 'Document', 'Value']]
     df['Value'] = (
         df['Value']
