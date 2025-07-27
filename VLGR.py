@@ -390,6 +390,8 @@ def excel_parser_INCOME(file_path):
         single_company = unique_companies[0]
         df['Company'] = df['Company'].fillna(single_company)
 
+    df['Счет'] == '51'
+
     return df
 
 
