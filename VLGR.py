@@ -261,18 +261,20 @@ def excel_parser_STATEMENT(file_path):
     def strip_and_normalize_spaces(df, columns):
         """
         Очищает пробелы (в начале/конце и внутри) во всех указанных столбцах df.
-        Все виды пробелов и табуляций внутри строки заменяются на обычный пробел.
-        Если результат 'nan', возвращается None.
+        None/NaN значения остаются пропущенными!
         """
+        def clean_value(val):
+            if pd.isnull(val):
+                return val
+            s = str(val).strip()
+            s = re.sub(r'\s+', ' ', s)
+            # Если после чистки осталась пустая строка, вернуть None (по желанию)
+            if s.lower() in ['nan', 'none', '']:
+                return None
+            return s
         for col in columns:
             if col in df.columns:
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.strip()
-                    .apply(lambda x: re.sub(r'\s+', ' ', x))
-                    .replace({'nan': None})
-                )
+                df[col] = df[col].apply(clean_value)
         return df
     strip_and_normalize_spaces(df, ['Category', 'Contract', 'Bank Account'])
 
@@ -421,18 +423,20 @@ def excel_parser_INCOME(file_path):
     def strip_and_normalize_spaces(df, columns):
         """
         Очищает пробелы (в начале/конце и внутри) во всех указанных столбцах df.
-        Все виды пробелов и табуляций внутри строки заменяются на обычный пробел.
-        Если результат 'nan', возвращается None.
+        None/NaN значения остаются пропущенными!
         """
+        def clean_value(val):
+            if pd.isnull(val):
+                return val
+            s = str(val).strip()
+            s = re.sub(r'\s+', ' ', s)
+            # Если после чистки осталась пустая строка, вернуть None (по желанию)
+            if s.lower() in ['nan', 'none', '']:
+                return None
+            return s
         for col in columns:
             if col in df.columns:
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.strip()
-                    .apply(lambda x: re.sub(r'\s+', ' ', x))
-                    .replace({'nan': None})
-                )
+                df[col] = df[col].apply(clean_value)
         return df
     strip_and_normalize_spaces(df, ['Category', 'Contract', 'Document'])
     
