@@ -256,6 +256,21 @@ def excel_parser_STATEMENT(file_path):
     final_order = columns_in_order + other_columns
     # Переупорядочиваем DataFrame
     df = df[final_order]
+
+    # Удаляем лишние пробелы
+    df['Category'] = (
+        df['Category']
+        .astype(str)
+        .str.strip()  # удаляем пробелы в начале и конце строки
+        .apply(lambda x: re.sub(r'\s+', ' ', x))  # любые пробельные символы внутри (в т.ч. широкие, табы, \xa0 и т.п.) заменяем на обычный пробел
+        .replace({'nan': None})  # если строка стала 'nan', возвращаем к None
+    )
+
+    # Замена значений Category для корректного соответствия
+    replace_dict = {
+        'Аренда помещения': 'Аренда помещений'
+    }
+    df['Category'] = df['Category'].replace(replace_dict)
     
     return df
 
@@ -392,12 +407,22 @@ def excel_parser_INCOME(file_path):
 
     df['Счет'] = 'Данные по выручке'
 
+
+    # Удаляем лишние пробелы
+    df['Category'] = (
+        df['Category']
+        .astype(str)
+        .str.strip()  # удаляем пробелы в начале и конце строки
+        .apply(lambda x: re.sub(r'\s+', ' ', x))  # любые пробельные символы внутри (в т.ч. широкие, табы, \xa0 и т.п.) заменяем на обычный пробел
+        .replace({'nan': None})  # если строка стала 'nan', возвращаем к None
+    )
+    
     # Замена значений Category для корректного соответствия
     replace_dict = {
         'Аренда помещения': 'Аренда помещений'
     }
     df['Category'] = df['Category'].replace(replace_dict)
-
+    
     return df
 
 
