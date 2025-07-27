@@ -276,7 +276,7 @@ def excel_parser_STATEMENT(file_path):
             if col in df.columns:
                 df[col] = df[col].apply(clean_value)
         return df
-    strip_and_normalize_spaces(df, ['Category', 'Contract', 'Bank Account'])
+    strip_and_normalize_spaces(df, ['Estate', 'Category', 'Contract', 'Bank Account'])
 
     # Замена значений Category для корректного соответствия
     replace_dict = {
@@ -438,7 +438,7 @@ def excel_parser_INCOME(file_path):
             if col in df.columns:
                 df[col] = df[col].apply(clean_value)
         return df
-    strip_and_normalize_spaces(df, ['Category', 'Contract', 'Document'])
+    strip_and_normalize_spaces(df, ['Estate', 'Category', 'Contract', 'Document'])
     
     # Замена значений Category для корректного соответствия
     replace_dict = {
