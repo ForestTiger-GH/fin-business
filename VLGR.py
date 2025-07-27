@@ -258,13 +258,23 @@ def excel_parser_STATEMENT(file_path):
     df = df[final_order]
 
     # Удаляем лишние пробелы
-    df['Category'] = (
-        df['Category']
-        .astype(str)
-        .str.strip()  # удаляем пробелы в начале и конце строки
-        .apply(lambda x: re.sub(r'\s+', ' ', x))  # любые пробельные символы внутри (в т.ч. широкие, табы, \xa0 и т.п.) заменяем на обычный пробел
-        .replace({'nan': None})  # если строка стала 'nan', возвращаем к None
-    )
+    def strip_and_normalize_spaces(df, columns):
+        """
+        Очищает пробелы (в начале/конце и внутри) во всех указанных столбцах df.
+        Все виды пробелов и табуляций внутри строки заменяются на обычный пробел.
+        Если результат 'nan', возвращается None.
+        """
+        for col in columns:
+            if col in df.columns:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.strip()
+                    .apply(lambda x: re.sub(r'\s+', ' ', x))
+                    .replace({'nan': None})
+                )
+        return df
+    strip_and_normalize_spaces(df, ['Category', 'Contract', 'Bank Account'])
 
     # Замена значений Category для корректного соответствия
     replace_dict = {
@@ -406,16 +416,25 @@ def excel_parser_INCOME(file_path):
         df['Company'] = df['Company'].fillna(single_company)
 
     df['Счет'] = 'Данные по выручке'
-
-
+    
     # Удаляем лишние пробелы
-    df['Category'] = (
-        df['Category']
-        .astype(str)
-        .str.strip()  # удаляем пробелы в начале и конце строки
-        .apply(lambda x: re.sub(r'\s+', ' ', x))  # любые пробельные символы внутри (в т.ч. широкие, табы, \xa0 и т.п.) заменяем на обычный пробел
-        .replace({'nan': None})  # если строка стала 'nan', возвращаем к None
-    )
+    def strip_and_normalize_spaces(df, columns):
+        """
+        Очищает пробелы (в начале/конце и внутри) во всех указанных столбцах df.
+        Все виды пробелов и табуляций внутри строки заменяются на обычный пробел.
+        Если результат 'nan', возвращается None.
+        """
+        for col in columns:
+            if col in df.columns:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.strip()
+                    .apply(lambda x: re.sub(r'\s+', ' ', x))
+                    .replace({'nan': None})
+                )
+        return df
+    strip_and_normalize_spaces(df, ['Category', 'Contract', 'Document'])
     
     # Замена значений Category для корректного соответствия
     replace_dict = {
