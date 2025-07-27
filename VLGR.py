@@ -390,7 +390,13 @@ def excel_parser_INCOME(file_path):
         single_company = unique_companies[0]
         df['Company'] = df['Company'].fillna(single_company)
 
-    df['Счет'] = 'Выручка'
+    df['Счет'] = 'Данные по выручке'
+
+    # Замена значений Category для корректного соответствия
+    replace_dict = {
+        'Аренда помещения': 'Аренда помещений'
+    }
+    df['Category'] = df['Category'].replace(replace_dict)
 
     return df
 
