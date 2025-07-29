@@ -477,7 +477,10 @@ def parse_statement_folder(root_main, root_statement, parser_func):
         file = all_files[i]
         try:
             df = parser_func(file)
-            df['SOURCE_FILE'] = os.path.basename(file)  # если нужно имя файла
+            # Получаем относительный путь файла от root_main:
+            rel_path = os.path.relpath(file, root_main)
+            df['SOURCE_FILE'] = rel_path
+            # df['SOURCE_FILE'] = os.path.basename(file)  # если нужно имя файла
             all_data.append(df)
         except Exception as e:
             print(f'Ошибка при парсинге файла {file}: {e}')
@@ -534,7 +537,10 @@ def parse_income_folder(root_main, root_income, parser_func):
         file = all_files[i]
         try:
             df = parser_func(file)
-            df['SOURCE_FILE'] = os.path.basename(file)  # можно добавить имя файла в итоговую таблицу
+            # Получаем относительный путь файла от root_main:
+            rel_path = os.path.relpath(file, root_main)
+            df['SOURCE_FILE'] = rel_path
+            # df['SOURCE_FILE'] = os.path.basename(file)  # можно добавить имя файла в итоговую таблицу
             all_data.append(df)
         except Exception as e:
             print(f'Ошибка при парсинге файла {file}: {e}')
