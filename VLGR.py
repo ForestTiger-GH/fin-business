@@ -565,6 +565,13 @@ def normalize_company_name(name):
     name_clean = name.strip().replace('«', '"').replace('»', '"').replace('.', '. ').strip()
     name_clean = re.sub(r'\s+', ' ', name_clean)
 
+    # --- НОВЫЙ ЭТАП: замена полных названий на сокращенные ОПФ ---
+    replacements = {
+        r'\bОбщество с ограниченной ответственностью\b': 'ООО'
+    }
+    for pattern, repl in replacements.items():
+        name_clean = re.sub(pattern, repl, name_clean, flags=re.I)
+
     upper = name_clean.upper()
 
     # 1. ИП — CAPS, "ИП" в начале
