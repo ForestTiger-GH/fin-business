@@ -937,3 +937,208 @@ def parse_suppliers_folder(root_main: str,
     desired = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE']
     other = [c for c in out.columns if c not in desired]
     return out[desired + other]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import re
+import pandas as pd
+
+def enrich_suppliers_semantics(
+    df_suppliers: pd.DataFrame,
+    root_estate_dictionary: str,
+    category_source_df: pd.DataFrame,
+    category_source_col: str = "Category",
+    debug: bool = False
+) -> pd.DataFrame:
+    """
+    Пост-обработка для таблицы от парсера 'Поставщики услуг'.
+    Вход:
+      - df_suppliers: таблица после VLGR.parse_suppliers_folder (Doc/AnDT/AnCR — СПИСКИ).
+      - root_estate_dictionary: путь к xlsx со словарём объектов (берём два столбца: 'Исходное наименование' и 'Наименование объекта').
+      - category_source_df: ДРУГАЯ таблица (общая база по другим формам), из неё берём уникальные категории.
+      - category_source_col: имя столбца в category_source_df, откуда берём категории.
+
+    Логика извлечения:
+      Bank Account — если элемент начинается с длинной цифропоследовательности (>=14 цифр).
+      Document     — если элемент похож на: ['Поступление','Акт','Накладная','УПД','Списание'].
+      Contract     — если похож на 'Договор'/'Дог.'.
+      Estate       — если примерно совпадает с терминами из словаря объектов.
+      Category     — если примерно совпадает с терминами из category_source_df[category_source_col].
+      Partner/Supplier (только из AnDT/AnCR): если элемент ни с чем не совпал и БЕЗ цифр:
+         DtCr='Dt' → AnDT=Supplier, AnCR=Partner;
+         DtCr='Cr' → AnDT=Partner,  AnCR=Supplier.
+      Остальное — в список temp.
+
+    Возвращает: df_suppliers + столбцы:
+      Partner, Supplier, Category, Estate, Contract, Document, Bank Account, temp(list)
+    """
+
+    df = df_suppliers.copy()
+
+    # ---------- утилиты ----------
+    def norm(s: str | None) -> str:
+        if s is None: return ""
+        s = str(s).lower()
+        s = s.replace("\xa0", " ")
+        s = re.sub(r"[\t\r\n]+", " ", s)
+        s = re.sub(r"[\"'`«»“”„]", "", s)
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+
+    def split_list_cell(v) -> list[str]:
+        if v is None: return []
+        if isinstance(v, list): parts = v
+        else:
+            txt = str(v).replace("\r\n","\n").replace("\r","\n")
+            parts = [p.strip() for p in txt.split("\n")]
+        return [p for p in parts if p and p != "<...>"]
+
+    def starts_with_long_digits(s: str) -> bool:
+        return re.match(r"^\d{14,}", s) is not None
+
+    def contains_digits(s: str) -> bool:
+        return any(ch.isdigit() for ch in s)
+
+    def ratio(a: str, b: str) -> float:
+        a2, b2 = norm(a), norm(b)
+        if not a2 or not b2: return 0.0
+        if a2 in b2 or b2 in a2: return 1.0
+        aw, bw = set(a2.split()), set(b2.split())
+        if not aw or not bw: return 0.0
+        inter = len(aw & bw); base = min(len(aw), len(bw))
+        return inter / base if base else 0.0
+
+    def fuzzy_has_match(item: str, candidates: list[str], thr: float) -> bool:
+        if not item: return False
+        best = 0.0
+        n_item = norm(item)
+        for c in candidates:
+            r = ratio(n_item, c)
+            if r > best: best = r
+            if best >= thr: break
+        return best >= thr
+
+    # ---------- справочники ----------
+    # Estate — из словаря объектов
+    try:
+        dict_df = pd.read_excel(root_estate_dictionary)
+        cols = {c.lower(): c for c in dict_df.columns}
+        col_src = next((cols[k] for k in cols if "исходное" in k and "наимен" in k), None)
+        col_std = next((cols[k] for k in cols if "наимен" in k and "объект"  in k), None)
+        estate_terms = []
+        if col_src: estate_terms += [norm(x) for x in dict_df[col_src].dropna().astype(str)]
+        if col_std: estate_terms += [norm(x) for x in dict_df[col_std].dropna().astype(str)]
+        estate_terms = sorted(set([x for x in estate_terms if x]))
+    except Exception as e:
+        if debug: print(f"[enrich] Не удалось прочитать словарь объектов: {e}")
+        estate_terms = []
+
+    # Category — ИЗ ДРУГОЙ ТАБЛИЦЫ (общая база)
+    if category_source_col in category_source_df.columns:
+        category_terms = sorted(set([norm(x) for x in category_source_df[category_source_col].dropna().astype(str) if norm(x)]))
+    else:
+        category_terms = []
+        if debug: print(f"[enrich] В category_source_df нет столбца '{category_source_col}'")
+
+    contract_terms = [norm("договор"), norm("дог.")]
+    document_terms = [norm(x) for x in ["Поступление","Акт","Накладная","УПД","Списание"]]
+
+    # ---------- подготовка выходных столбцов ----------
+    for col in ["Partner","Supplier","Category","Estate","Contract","Document","Bank Account","temp"]:
+        if col not in df.columns: df[col] = None
+
+    # ---------- основной цикл ----------
+    for i, row in df.iterrows():
+        dtcr = str(row.get("DtCr","")).strip()
+
+        doc_items  = split_list_cell(row.get("Doc"))
+        andt_items = split_list_cell(row.get("AnDT"))
+        ancr_items = split_list_cell(row.get("AnCR"))
+
+        partner = row.get("Partner")
+        supplier = row.get("Supplier")
+        category = row.get("Category")
+        estate = row.get("Estate")
+        contract = row.get("Contract")
+        document = row.get("Document")
+        bank_account = row.get("Bank Account")
+
+        leftovers = []
+
+        tagged = [("Doc",x) for x in doc_items] + [("AnDT",x) for x in andt_items] + [("AnCR",x) for x in ancr_items]
+
+        for origin, item in tagged:
+            base = item.strip()
+            if not base or base == "<...>": continue
+            n = norm(base)
+
+            # 1) Банк. счёт
+            if not bank_account and starts_with_long_digits(n):
+                bank_account = base; continue
+
+            # 2) Документ
+            if not document and fuzzy_has_match(n, document_terms, thr=0.8):
+                document = base; continue
+
+            # 3) Договор
+            if not contract and fuzzy_has_match(n, contract_terms, thr=0.8):
+                contract = base; continue
+
+            # 4) Объект
+            if not estate and estate_terms and fuzzy_has_match(n, estate_terms, thr=0.7):
+                estate = base; continue
+
+            # 5) Категория (из внешнего справочника)
+            if (category is None or str(category).strip() == "") and category_terms and fuzzy_has_match(n, category_terms, thr=0.75):
+                category = base; continue
+
+            leftovers.append((origin, base))
+
+        # Partner/Supplier — только AnDT/AnCR без цифр
+        andt_names = [txt for (orig, txt) in leftovers if orig == "AnDT" and not contains_digits(norm(txt))]
+        ancr_names = [txt for (orig, txt) in leftovers if orig == "AnCR" and not contains_digits(norm(txt))]
+
+        if dtcr == "Dt":
+            supplier = supplier or (andt_names[0] if andt_names else None)
+            partner  = partner  or (ancr_names[0] if ancr_names else None)
+        elif dtcr == "Cr":
+            partner  = partner  or (andt_names[0] if andt_names else None)
+            supplier = supplier or (ancr_names[0] if ancr_names else None)
+
+        # убрать из leftovers то, что «съели» как партнёра/поставщика
+        consumed = set()
+        if supplier:
+            consumed.add(("AnDT", supplier)) if dtcr == "Dt" else consumed.add(("AnCR", supplier))
+        if partner:
+            consumed.add(("AnCR", partner)) if dtcr == "Dt" else consumed.add(("AnDT", partner))
+        temp_list = [txt for (orig, txt) in leftovers if (orig, txt) not in consumed]
+
+        # запись
+        if partner:       df.at[i, "Partner"] = partner
+        if supplier:      df.at[i, "Supplier"] = supplier
+        if estate:        df.at[i, "Estate"] = estate
+        if contract:      df.at[i, "Contract"] = contract
+        if document:      df.at[i, "Document"] = document
+        if bank_account:  df.at[i, "Bank Account"] = bank_account
+        if category is not None and (row.get("Category") in [None, "", float("nan")] or pd.isna(row.get("Category"))):
+            df.at[i, "Category"] = category
+
+        df.at[i, "temp"] = temp_list
+
+        if debug and (partner or supplier or category or estate or contract or document or bank_account):
+            print(f"[{i}] DtCr={dtcr} | P={partner} | S={supplier} | Cat={category} | Estate={estate} | Ctr={contract} | Doc={document} | Bank={bank_account}")
+
+    return df
+
