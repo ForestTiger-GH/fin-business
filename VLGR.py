@@ -661,26 +661,28 @@ def normalize_company_names(val):
 
 
 
-import re, os, glob
+import os, re, glob
 import pandas as pd
 from openpyxl import load_workbook
 from tqdm import trange
 
 def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
     """
-    Парсер 'Поставщики услуг' с корректным разделением Счет/Value.
+    Парсер 'Поставщики услуг' с корректным разделением Счет/Value и разбиением Doc/AnDT/AnCR на списки.
 
-    Правила:
-      • Ищем по шапке блоки Дебет/Кредит и подзаголовок 'Счет'.
-      • AccountCol = колонка, где под зонтиком 'Дебет'/'Кредит' стоит 'Счет'.
-        SumCol     = AccountCol + 1 (строго справа).
-      • Для строк 'Итого/Обороты/Сальдо', где сумма «слилась» в AccountCol,
-        переносим число в Value ТОЛЬКО если текст AccountCol не выглядит как код счёта.
-      • В остальных строках:
-          Счет = текст из AccountCol (в т.ч. '60.01', '76.09', '26', ...)
-          Value = число из SumCol.
+    Логика колонок:
+      • Определяем по шапке блоки 'Дебет/Дт' и 'Кредит/Кт'. Под каждым ищем подзаголовок 'Счет'.
+        DtAccountCol = колонка 'Счет' под Дебетом; DtSumCol = DtAccountCol + 1.
+        CrAccountCol = колонка 'Счет' под Кредитом; CrSumCol = CrAccountCol + 1.
+      • Дата — из первого столбца.
+      • Doc / AnDT / AnCR — разбиваются в СПИСКИ по переводам строк в ячейке; элементы '<...>' удаляются.
+      • Обычные строки: 'Счет' — текст из AccountCol; 'Value' — число из SumCol.
+      • Итоговые строки ('итог/обороты/сальдо'): если сумма «слилась» в AccountCol и SumCol пуст,
+        переносим число в Value, 'Счет' оставляем None, НО только если содержимое AccountCol не похоже на код счёта.
+      • Коды счётов распознаются по ^\\d{1,3}(\\.\\d{1,2})?$
     """
-    # ---------- утилиты ----------
+
+    # ----------------- утилиты -----------------
     def _cell_str(v):
         if v is None:
             return None
@@ -703,29 +705,47 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
             return None
         return pd.to_datetime(v, dayfirst=True, errors='coerce')
 
-    def _looks_like_account(text: str) -> bool:
-        """распознаём коды счетов вида 26, 51, 60.01, 76.09, 101, 101.02 и т.п."""
+    def _looks_like_account(text) -> bool:
+        """Распознаём коды счётов: 26, 51, 60.01, 76.09, 101, 101.02 и т.п."""
         if text is None:
             return False
         s = str(text).strip().replace('\xa0','').replace(' ','')
         return re.match(r'^\d{1,3}(?:\.\d{1,2})?$', s) is not None
 
-    def _format_account_text(v) -> str | None:
-        """Гарантируем текст для колонки 'Счет' (не число)."""
+    def _format_account_text(v):
+        """Гарантируем текст для 'Счет' (не число, без экспонент, без лишних нулей)."""
         s = _cell_str(v)
         if s is not None:
             return s
         if isinstance(v, (int, float)) and not pd.isna(v):
-            # нормализуем без экспоненты, обрежем лишние нули
-            s = f"{float(v):.2f}".rstrip('0').rstrip('.')
+            s = ('%f' % float(v)).rstrip('0').rstrip('.')
             return s
         return None
 
-    def _is_total_context(values: list[str | None]) -> bool:
-        """Понимаем, что строка итоговая/оборот/сальдо — только для разрешения «перекладки»."""
+    def _is_total_context(values):
+        """Определяем итоговый/оборотный контекст строки по ключевым словам."""
         text = ' '.join([x for x in values if x]).lower()
         return any(k in text for k in ('итог', 'обороты', 'оборот', 'сальдо'))
 
+    def _split_cell_to_list(v):
+        """
+        Делит содержимое ячейки на список по переводам строк.
+        Чистит пробелы, выбрасывает пустые элементы и точное значение '<...>'.
+        """
+        if v is None:
+            return []
+        s = str(v).replace('\r\n', '\n').replace('\r', '\n')
+        parts = [p.strip() for p in s.split('\n')]
+        parts = [p for p in parts if p and p != '<...>']
+        return parts
+
+    def _clean_text(x):
+        if x is None or (isinstance(x, float) and pd.isna(x)):
+            return None
+        s = re.sub(r'\s+', ' ', str(x)).strip()
+        return s if s else None
+
+    # --------- поиски в листе (компания, старт, шапка) ----------
     def _find_company(ws):
         for r in range(1, min(ws.max_row, 4)+1):
             for c in range(1, 3+1):
@@ -742,20 +762,14 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
                 v = _cell_str(ws.cell(row=r, column=c).value)
                 if v and 'сальдо на начало' in v.lower():
                     return r + 1
-        # если не нашли — после шапки (часто 8–10 строк)
-        return 10
+        return 10  # дефолтно после шапки
 
     def _detect_columns_by_header(ws, start_row):
         """
-        Детектор по реальной шапке:
-          - ищем ячейку с 'Дебет'/'Дт' и сразу ПОД ней 'Счет' => DtAccountCol
-          - аналогично 'Кредит'/'Кт' => CrAccountCol
-          - сумма = сосед справа (+1)
-        Возвращает (dt_acc_col, dt_sum_col, cr_acc_col, cr_sum_col) в 1-based.
+        Ищем ячейки 'Дебет/Дт' и 'Кредит/Кт' и строго под ними 'Счет'.
+        Возвращает (dt_acc_col, dt_sum_col, cr_acc_col, cr_sum_col) — 1-based.
         """
         max_c = min(ws.max_column, 50)
-        # сканируем строки шапки (до start_row включительно)
-        head_top = max(1, start_row - 1)
         head_bot = min(start_row + 3, ws.max_row)
 
         dt_acc_col = cr_acc_col = None
@@ -775,7 +789,6 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
                     if below and 'счет' in below.lower():
                         cr_acc_col = c
 
-        # фоллбэки, если шапка «экзотическая»
         if dt_acc_col is None:
             dt_acc_col = 5
         if cr_acc_col is None:
@@ -786,11 +799,11 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
 
         return dt_acc_col, dt_acc_col + 1, cr_acc_col, cr_acc_col + 1
 
-    # ---------- основа ----------
+    # ----------------- основная логика -----------------
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
 
-    company = _find_company(ws)
+    company   = _find_company(ws)
     start_row = _find_start_row(ws)
     dt_acc_col, dt_sum_col, cr_acc_col, cr_sum_col = _detect_columns_by_header(ws, start_row)
 
@@ -798,27 +811,32 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
     max_r = ws.max_row
 
     for r in range(start_row, max_r+1):
+        # базовые поля
         c1 = ws.cell(row=r, column=1).value   # Date
         c2 = ws.cell(row=r, column=2).value   # Doc
         c3 = ws.cell(row=r, column=3).value   # AnDT
         c4 = ws.cell(row=r, column=4).value   # AnCR
 
+        # детектированные колонки
         dt_acc_cell = ws.cell(row=r, column=dt_acc_col).value
         dt_sum_cell = ws.cell(row=r, column=dt_sum_col).value
         cr_acc_cell = ws.cell(row=r, column=cr_acc_col).value
         cr_sum_cell = ws.cell(row=r, column=cr_sum_col).value
 
-        # пустая строка?
+        # пропускаем пустые строки
         if all(_cell_str(v) is None for v in [c1,c2,c3,c4,dt_acc_cell,dt_sum_cell,cr_acc_cell,cr_sum_cell]):
             continue
 
-        date = _to_datetime(c1)
-        date_out = None if (date is None or pd.isna(date)) else date.date()
-        doc  = _cell_str(c2)
-        andt = _cell_str(c3)
-        ancr = _cell_str(c4)
+        # дата
+        dt = _to_datetime(c1)
+        date_out = None if (dt is None or pd.isna(dt)) else dt.date()
 
-        # текстовый контекст для определения 'итоговых' строк
+        # МНОГОСТРОЧНЫЕ ПОЛЯ -> СПИСКИ
+        doc_list  = _split_cell_to_list(c2)
+        andt_list = _split_cell_to_list(c3)
+        ancr_list = _split_cell_to_list(c4)
+
+        # контекст для «Итого/Обороты/Сальдо»
         context_vals = [
             _cell_str(ws.cell(row=r, column=k).value)
             for k in range(1, min(ws.max_column, 6)+1)
@@ -829,7 +847,6 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
         dt_acc_text_raw = _format_account_text(dt_acc_cell)
         dt_val_right    = _to_number(dt_sum_cell)
 
-        # перенос из 'Счет' в Value — только если это итог/оборот/сальдо И не похоже на код счёта
         dt_val = dt_val_right
         dt_acc_text = dt_acc_text_raw
         if dt_val is None and is_total and not _looks_like_account(dt_acc_text_raw):
@@ -842,9 +859,9 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
             out.append({
                 'Date'   : date_out,
                 'Company': company,
-                'Doc'    : doc,
-                'AnDT'   : andt,
-                'AnCR'   : ancr,
+                'Doc'    : doc_list,
+                'AnDT'   : andt_list,
+                'AnCR'   : ancr_list,
                 'DtCr'   : 'Dt',
                 'Счет'   : dt_acc_text,
                 'Value'  : dt_val
@@ -866,9 +883,9 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
             out.append({
                 'Date'   : date_out,
                 'Company': company,
-                'Doc'    : doc,
-                'AnDT'   : andt,
-                'AnCR'   : ancr,
+                'Doc'    : doc_list,
+                'AnDT'   : andt_list,
+                'AnCR'   : ancr_list,
                 'DtCr'   : 'Cr',
                 'Счет'   : cr_acc_text,
                 'Value'  : cr_val
@@ -879,16 +896,44 @@ def excel_parser_SUPPLIERS(file_path: str, debug: bool=False) -> pd.DataFrame:
 
     df = pd.DataFrame(out)
 
-    # подчистим пробелы в текстах
-    def _clean_text(x):
-        if x is None or (isinstance(x, float) and pd.isna(x)):
-            return None
-        s = re.sub(r'\s+',' ', str(x)).strip()
-        return s if s else None
-
-    for col in ['Company','Doc','AnDT','AnCR','Счет']:
+    # финальная очистка только строковых полей
+    for col in ['Company','Счет']:
         if col in df.columns:
             df[col] = df[col].apply(_clean_text)
 
+    # порядок столбцов
     return df[['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value']]
 
+
+def parse_suppliers_folder(root_main: str,
+                           root_suppliers: str = 'Поставщики услуг',
+                           parser_func = None) -> pd.DataFrame:
+    """
+    Рекурсивно парсит все .xlsx из подкаталога 'Поставщики услуг' и объединяет.
+    Возвращает: Date, Company, Doc(list), AnDT(list), AnCR(list), DtCr, Счет, Value, SOURCE_FILE
+    """
+    if parser_func is None:
+        parser_func = excel_parser_SUPPLIERS
+
+    base_dir = os.path.join(root_main, root_suppliers)
+    files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
+    print(f'Найдено файлов: {len(files)}')
+
+    frames = []
+    for i in trange(len(files), desc="Поставщики услуг: парсинг", unit="файл"):
+        f = files[i]
+        try:
+            df = parser_func(f)
+            df['SOURCE_FILE'] = os.path.relpath(f, root_main)
+            frames.append(df)
+        except Exception as e:
+            print(f'Ошибка {f}: {e}')
+
+    if not frames:
+        return pd.DataFrame(columns=['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE'])
+
+    out = pd.concat(frames, ignore_index=True)
+    # финальная раскладка
+    desired = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE']
+    other = [c for c in out.columns if c not in desired]
+    return out[desired + other]
