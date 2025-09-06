@@ -657,74 +657,73 @@ def normalize_company_names(val):
 
 
 
-
-import re
-from openpyxl import load_workbook
+import re, os, glob
 import pandas as pd
-import os, glob
+from openpyxl import load_workbook
 from tqdm import trange
 
-# =========================
-# 1) Парсер "Поставщики услуг"
-# =========================
 def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
     """
-    Парсит карточки затрат/возмещений из каталога 'Поставщики услуг'.
-    Особенности:
-      - Название компании берётся из верхнего левого угла (ищем в A1:C4).
-      - Дата берётся из ПЕРВОГО столбца таблицы (строка данных => дата операции).
-      - Таблица не многоуровневая.
-      - Старт данных — строка, следующая за объединённой строкой 'Сальдо на начало'.
-      - Последняя строка — Итого — сохраняется и помечается флагом IsTotal=True.
-      - В таблице две "половины": Дт и Кт.
-        * Дт:   столбцы 5 (наименование/счёт) и 6 (сумма)
-        * Кт:   столбцы 7 (наименование/счёт) и 8 (сумма)
-      - Столбцы 2,3,4 выгружаем во временные поля Doc, AnDT, AnCR (дальше разложите при интеграции).
+    Парсер карточек из каталога 'Поставщики услуг'.
 
-    Возвращает wide-таблицу (одна строка = одна исходная строка), без расплава в long.
+    Что делает:
+      • Берёт компанию из верхнего левого блока (A1:C4).
+      • Дату — из первого столбца каждой строки данных.
+      • Старт данных — первая строка ПОСЛЕ 'Сальдо на начало'.
+      • Финальная строка 'Итого' тоже берётся:
+          - там часто объединение: сумма «попадает» в ячейку счёта.
+          - аккуратно переносим эту сумму в Value.
+      • Формируем единый формат (long-образный на одну строку):
+          Date, Company, Doc, AnDT, AnCR, DtCr ∈ {'Dt','Cr'}, Счет, Value.
+        (Строки, где нет счёта — это в т.ч. «Итоги», храним как Счет=None.)
     """
 
-    def _cell_str(val):
-        if val is None:
+    def _cell_str(v):
+        if v is None:
             return None
-        s = str(val).strip()
+        s = str(v).strip()
         return s if s else None
 
     def _to_number(x):
-        # Унификация чисел: "12 345,67" -> 12345.67; пустые -> NaN
         if x is None:
             return None
         if isinstance(x, (int, float)):
-            return x
-        s = str(x).replace('\xa0', '').replace(' ', '').replace(',', '.')
+            try:
+                # NaN -> None
+                return None if pd.isna(x) else float(x)
+            except Exception:
+                return None
+        s = str(x).replace('\xa0','').replace(' ','').replace(',','.')
         try:
             return float(s)
         except Exception:
             return None
 
+    def _to_datetime(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return None
+        # поддержка excel-дат, строк вида '01.02.2025', '2025-02-01', и т.п.
+        dt = pd.to_datetime(v, dayfirst=True, errors='coerce')
+        return dt
+
     def _find_company(ws):
-        # Ищем первое "разумное" название компании в A1:C4
-        for r in range(1, min(ws.max_row, 4) + 1):
-            for c in range(1, 3 + 1):
-                v = _cell_str(ws.cell(row=r, column=c).value)
-                if v and len(v) >= 3:
-                    # Отфильтруем заведомо нефамильные слова
-                    if not re.search(r'(период|отчет|дата|счет|наименование|организац)', v, flags=re.I):
-                        return v
-        # fallback
+        for r in range(1, min(ws.max_row, 4)+1):
+            for c in range(1, 3+1):
+                val = _cell_str(ws.cell(row=r, column=c).value)
+                if val and len(val) >= 3:
+                    if not re.search(r'(период|отчет|дата|счет|наименование|организац)', val, flags=re.I):
+                        return val
         return _cell_str(ws['A1'].value) or _cell_str(ws['B1'].value) or _cell_str(ws['C1'].value)
 
     def _find_start_row(ws):
-        # Ищем объединённую/служебную строку, где встречается "Сальдо на начало"
         max_r = min(ws.max_row, 100)
         max_c = min(ws.max_column, 12)
-        for r in range(1, max_r + 1):
-            for c in range(1, max_c + 1):
+        for r in range(1, max_r+1):
+            for c in range(1, max_c+1):
                 v = _cell_str(ws.cell(row=r, column=c).value)
                 if v and 'сальдо на начало' in v.lower():
-                    return r + 1  # данные начинаются со следующей строки
-        # если не нашли — безопасный запас на уровне 10-й строки (по описанию)
-        return 10
+                    return r + 1
+        return 10  # безопасный дефолт
 
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
@@ -732,166 +731,145 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
     company = _find_company(ws)
     start_row = _find_start_row(ws)
 
-    # Сканируем строки, собираем только непустые по ключевым столбцам
-    rows = []
-    last_non_empty_r = None
+    out_rows = []
     max_r = ws.max_row
 
-    for r in range(start_row, max_r + 1):
-        # Читаем столбцы 1..8
+    for r in range(start_row, max_r+1):
+        # 1..8 по описанию: 1=Date; 2,3,4 -> Doc/AnDT/AnCR; 5-6 Dt; 7-8 Cr
         c1 = ws.cell(row=r, column=1).value  # Date
         c2 = ws.cell(row=r, column=2).value  # Doc
         c3 = ws.cell(row=r, column=3).value  # AnDT
         c4 = ws.cell(row=r, column=4).value  # AnCR
-        c5 = ws.cell(row=r, column=5).value  # Дт счёт/описание
-        c6 = ws.cell(row=r, column=6).value  # Дт сумма
-        c7 = ws.cell(row=r, column=7).value  # Кт счёт/описание
-        c8 = ws.cell(row=r, column=8).value  # Кт сумма
+        c5 = ws.cell(row=r, column=5).value  # Dt account (или сумма в объединении)
+        c6 = ws.cell(row=r, column=6).value  # Dt sum
+        c7 = ws.cell(row=r, column=7).value  # Cr account (или сумма в объединении)
+        c8 = ws.cell(row=r, column=8).value  # Cr sum
 
-        # Пустая ли строка?
-        if all(_cell_str(v) is None for v in [c1, c2, c3, c4, c5, c6, c7, c8]):
+        # Пропускаем полностью пустые
+        if all(_cell_str(v) is None for v in [c1,c2,c3,c4,c5,c6,c7,c8]):
             continue
 
-        rows.append({
-            'Date_raw': c1,
-            'Doc': _cell_str(c2),
-            'AnDT': _cell_str(c3),
-            'AnCR': _cell_str(c4),
-            'Debit Account': _cell_str(c5),
-            'Debit': _to_number(c6),
-            'Credit Account': _cell_str(c7),
-            'Credit': _to_number(c8),
-            '_row': r
-        })
-        last_non_empty_r = r
+        # Дата
+        dt = _to_datetime(c1)
+        if pd.isna(dt):
+            # Если это не дата — возможно, служебные/пустые хвосты
+            # Но «Итоги» обычно содержат суммы — оставим обработку дальше,
+            # просто dt будет NaT и позже станет None (без времени).
+            pass
 
-    if not rows:
-        return pd.DataFrame(columns=[
-            'Date', 'Company', 'Doc', 'AnDT', 'AnCR',
-            'Debit Account', 'Debit', 'Credit Account', 'Credit', 'IsTotal'
-        ])
+        # --- ДЕБЕТ ---
+        # сумма может быть в c6 (штатно) ИЛИ из-за объединения — прямо в c5
+        dt_sum = _to_number(c6)
+        dt_sum_merged = _to_number(c5) if dt_sum is None else None
+        # если сумма «утонула» в ячейке счёта — вытаскиваем
+        if dt_sum is None and dt_sum_merged is not None:
+            dt_sum = dt_sum_merged
+            dt_acc = None
+        else:
+            # штатно: счёт в c5, если это не число
+            dt_acc = _cell_str(c5) if _to_number(c5) is None else None
 
-    df = pd.DataFrame(rows)
+        # --- КРЕДИТ ---
+        cr_sum = _to_number(c8)
+        cr_sum_merged = _to_number(c7) if cr_sum is None else None
+        if cr_sum is None and cr_sum_merged is not None:
+            cr_sum = cr_sum_merged
+            cr_acc = None
+        else:
+            cr_acc = _cell_str(c7) if _to_number(c7) is None else None
 
-    # Обрезаем "хвост" за последней непустой строкой (если вдруг налетели на форматные хвосты)
-    if last_non_empty_r:
-        df = df[df['_row'] <= last_non_empty_r].copy()
+        doc  = _cell_str(c2)
+        andt = _cell_str(c3)
+        ancr = _cell_str(c4)
 
-    # Преобразуем даты из первого столбца
-    # Поддерживаем реальные Excel-даты, строки формата 01.02.2025, 2025-02-01 и т.п.
-    def _to_datetime(v):
-        if v is None or (isinstance(v, float) and pd.isna(v)):
+        # По вашему правилу «в строке либо Дт, либо Кт»
+        # Но на «Итого» иногда могут встретиться обе суммы.
+        # Делаем универсально: создаём 0..2 строк в long-стиле.
+        def _append(side, acc, val):
+            out_rows.append({
+                'Date'   : None if pd.isna(dt) else dt.date(),
+                'Company': company,
+                'Doc'    : doc,
+                'AnDT'   : andt,
+                'AnCR'   : ancr,
+                'DtCr'   : side,         # 'Dt' или 'Cr'
+                'Счет'   : acc,          # None для «Итога»
+                'Value'  : val           # сумма
+            })
+
+        added = False
+        if dt_sum is not None:
+            _append('Dt', dt_acc, dt_sum)
+            added = True
+        if cr_sum is not None:
+            _append('Cr', cr_acc, cr_sum)
+            added = True
+
+        # Если обе суммы пустые, но строка «не пустая» — пропустим (мусор/формат)
+        if not added:
+            continue
+
+    if not out_rows:
+        return pd.DataFrame(columns=['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value'])
+
+    df = pd.DataFrame(out_rows)
+
+    # Нормализация текстов
+    def _clean_text(x):
+        if x is None or (isinstance(x, float) and pd.isna(x)):
             return None
-        try:
-            # Если это уже datetime/date
-            return pd.to_datetime(v, dayfirst=True, errors='coerce')
-        except Exception:
-            return pd.NaT
+        s = re.sub(r'\s+',' ', str(x)).strip()
+        return s if s else None
 
-    df['Date'] = df['Date_raw'].apply(_to_datetime)
-    df.drop(columns=['Date_raw'], inplace=True)
+    for col in ['Company','Doc','AnDT','AnCR','Счет']:
+        if col in df.columns:
+            df[col] = df[col].apply(_clean_text)
 
-    # Флаг итоговой строки
-    def _is_total(row) -> bool:
-        parts = [row.get('Doc'), row.get('AnDT'), row.get('AnCR'),
-                 row.get('Debit Account'), row.get('Credit Account')]
-        txt = ' '.join([p for p in parts if p]).lower()
-        return any(key in txt for key in ['итог', 'всего'])
-
-    df['IsTotal'] = df.apply(_is_total, axis=1)
-
-    # Добавляем компанию
-    df.insert(1, 'Company', company if company else None)
-
-    # Порядок столбцов (wide)
-    cols = [
-        'Date', 'Company', 'Doc', 'AnDT', 'AnCR',
-        'Debit Account', 'Debit', 'Credit Account', 'Credit', 'IsTotal'
-    ]
-    # Убедимся, что все есть
+    # Порядок столбцов по ТЗ
+    cols = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value']
     for c in cols:
         if c not in df.columns:
             df[c] = None
     df = df[cols]
 
-    # Нормализация пробелов в текстах
-    def _clean_text(s):
-        if pd.isna(s) or s is None:
-            return None
-        ss = re.sub(r'\s+', ' ', str(s)).strip()
-        return ss if ss else None
-
-    for c in ['Company', 'Doc', 'AnDT', 'AnCR', 'Debit Account', 'Credit Account']:
-        if c in df.columns:
-            df[c] = df[c].apply(_clean_text)
-
-    # Дату делаем именно датой (без времени)
-    df['Date'] = pd.to_datetime(df['Date']).dt.date
-
     return df
 
 
-# =========================
-# 2) Обход каталога "Поставщики услуг"
-# =========================
 def parse_suppliers_folder(root_main: str,
                            root_suppliers: str = 'Поставщики услуг',
                            parser_func = None) -> pd.DataFrame:
     """
-    Рекурсивно проходит по всем .xlsx в каталоге 'Поставщики услуг', парсит и объединяет.
-
-    Аргументы:
-        root_main       : корневая папка (например '/content/gdrive/MyDrive/Волгоград/2025-08')
-        root_suppliers  : подкаталог (по умолчанию 'Поставщики услуг')
-        parser_func     : функция-парсер, по умолчанию VLGR.excel_parser_SUPPLIERS
-
-    Возвращает:
-        pd.DataFrame со столбцами:
-        ['Date','Company','Doc','AnDT','AnCR','Debit Account','Debit','Credit Account','Credit','IsTotal','SOURCE_FILE']
+    Рекурсивно парсит все .xlsx из подкаталога 'Поставщики услуг' и объединяет.
+    Возвращает столбцы: Date, Company, Doc, AnDT, AnCR, DtCr, Счет, Value, SOURCE_FILE
     """
     if parser_func is None:
         parser_func = excel_parser_SUPPLIERS
 
     base_dir = os.path.join(root_main, root_suppliers)
-    all_files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
-
-    print(f'Найдено файлов: {len(all_files)}')
+    files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
+    print(f'Найдено файлов: {len(files)}')
 
     frames = []
-    for i in trange(len(all_files), desc="Поставщики услуг: парсинг", unit="файл"):
-        f = all_files[i]
+    for i in trange(len(files), desc="Поставщики услуг: парсинг", unit="файл"):
+        f = files[i]
         try:
             df = parser_func(f)
-            # относительный путь к корню (как в statement/income)
             df['SOURCE_FILE'] = os.path.relpath(f, root_main)
             frames.append(df)
         except Exception as e:
             print(f'Ошибка {f}: {e}')
 
     if not frames:
-        return pd.DataFrame(columns=[
-            'Date','Company','Doc','AnDT','AnCR',
-            'Debit Account','Debit','Credit Account','Credit','IsTotal','SOURCE_FILE'
-        ])
+        return pd.DataFrame(columns=['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE'])
 
     out = pd.concat(frames, ignore_index=True)
 
-    # Лёгкая унификация порядка столбцов
-    desired = [
-        'Date','Company','Doc','AnDT','AnCR',
-        'Debit Account','Debit','Credit Account','Credit','IsTotal','SOURCE_FILE'
-    ]
+    # финальная раскладка
+    desired = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE']
     other = [c for c in out.columns if c not in desired]
     out = out[desired + other]
 
     return out
-
-
-
-
-
-
-
 
 
 
