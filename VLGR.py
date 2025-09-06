@@ -962,12 +962,21 @@ def enrich_suppliers_semantics(
     category_source_col: str = "Category",
     debug: bool = False,
     show_progress: bool = True,
-    progress_each: int = 500
+    progress_each: int = 500,
+    normalize_company_fn=None
 ) -> pd.DataFrame:
     """
-    Пост-обработка 'Поставщики услуг'.
-    Берёт категории из ДРУГОЙ таблицы (category_source_df[category_source_col]).
-    Показывает прогресс: tqdm (если доступен) или статус-строку каждые progress_each строк.
+    Пост-обработка результатов VLGR.parse_suppliers_folder.
+
+    Новые правила:
+      • Финальная проверка 'компанийности' в AnDT/AnCR: элемент считается названием компании,
+        если НЕ распознан по другим правилам и содержит НЕ БОЛЕЕ двух цифр.
+      • Применяем нормализацию к Partner и Supplier (normalize_company_names из VLGR.py).
+      • Для строк с перерасчётом долга (в Doc есть 'Корректировка долга' или 'Переуступка долга'):
+           - AnCR -> Partner
+           - AnDT -> Related Company
+           - 'Переуступка долга...' из Doc -> Category
+           - 'Корректировка долга...' из Doc -> Document
     """
 
     # -------- прогресс: инициализация --------
@@ -975,6 +984,16 @@ def enrich_suppliers_semantics(
         from tqdm.auto import tqdm
     except Exception:
         tqdm = None
+
+    # функция нормализации компаний
+    if normalize_company_fn is None:
+        # попробуем найти в модуле VLGR
+        try:
+            # если эта функция лежит в том же модуле, она попадёт в globals()
+            _candidate = globals().get("normalize_company_names", None)
+            normalize_company_fn = _candidate if callable(_candidate) else (lambda x: x)
+        except Exception:
+            normalize_company_fn = (lambda x: x)
 
     df = df_suppliers.copy()
 
@@ -997,7 +1016,10 @@ def enrich_suppliers_semantics(
         return [p for p in parts if p and p != "<...>"]
 
     def starts_with_long_digits(s: str) -> bool:
-        return re.match(r"^\d{14,}", s) is not None
+        return re.match(r"^\d{14,}", s) is not None  # bank account heuristic
+
+    def digits_count(s: str) -> int:
+        return sum(ch.isdigit() for ch in s)
 
     def contains_digits(s: str) -> bool:
         return any(ch.isdigit() for ch in s)
@@ -1020,6 +1042,10 @@ def enrich_suppliers_semantics(
             if r > best: best = r
             if best >= thr: break
         return best >= thr
+
+    def startswith_any(s: str, prefixes: list[str]) -> bool:
+        s2 = norm(s)
+        return any(s2.startswith(norm(p)) for p in prefixes)
 
     # ---------- справочники ----------
     # Estate — из словаря объектов
@@ -1046,22 +1072,23 @@ def enrich_suppliers_semantics(
     contract_terms = [norm("договор"), norm("дог.")]
     document_terms = [norm(x) for x in ["Поступление","Акт","Накладная","УПД","Списание"]]
 
+    # Спец-префиксы перерасчёта долга
+    DOC_PREFIX_REASSIGN = ["Переуступка долга"]
+    DOC_PREFIX_CORRECT  = ["Корректировка долга"]
+
     # ---------- подготовка выходных столбцов ----------
-    for col in ["Partner","Supplier","Category","Estate","Contract","Document","Bank Account","temp"]:
+    for col in ["Partner","Supplier","Related Company","Category","Estate","Contract","Document","Bank Account","temp"]:
         if col not in df.columns: df[col] = None
 
     # для статистики прогресса
-    stats = {"Partner":0,"Supplier":0,"Category":0,"Estate":0,"Contract":0,"Document":0,"Bank":0}
+    stats = {"Partner":0,"Supplier":0,"Related":0,"Category":0,"Estate":0,"Contract":0,"Document":0,"Bank":0}
 
     n = len(df)
-    iterator = range(n)
-
-    # выбрать режим прогресса
-    use_tqdm = show_progress and (tqdm is not None)
+    use_tqdm = show_progress and ('tqdm' in globals() and tqdm is not None)
     pbar = tqdm(total=n, desc="Enrich suppliers", mininterval=0.5) if use_tqdm else None
 
     # ---------- основной цикл ----------
-    for idx in iterator:
+    for idx in range(n):
         row = df.iloc[idx]
         dtcr = str(row.get("DtCr","")).strip()
 
@@ -1071,6 +1098,7 @@ def enrich_suppliers_semantics(
 
         partner = row.get("Partner")
         supplier = row.get("Supplier")
+        related_company = row.get("Related Company")
         category = row.get("Category")
         estate = row.get("Estate")
         contract = row.get("Contract")
@@ -1079,18 +1107,33 @@ def enrich_suppliers_semantics(
 
         leftovers = []
 
+        # Определяем: это кейс перерасчёта долга?
+        is_recalc_doc = any(startswith_any(x, DOC_PREFIX_REASSIGN + DOC_PREFIX_CORRECT) for x in doc_items)
+
+        # Сразу обработаем спец-правила из Doc:
+        #   'Переуступка долга...' -> Category
+        #   'Корректировка долга...' -> Document
+        for x in doc_items:
+            if startswith_any(x, DOC_PREFIX_REASSIGN) and (category is None or str(category).strip() == ""):
+                category = x; stats["Category"] += 1
+            if startswith_any(x, DOC_PREFIX_CORRECT) and document is None:
+                document = x; stats["Document"] += 1
+
+        # Тэгируем всё для дальнейшей классификации
         tagged = [("Doc",x) for x in doc_items] + [("AnDT",x) for x in andt_items] + [("AnCR",x) for x in ancr_items]
 
+        # Базовые правила для каждого элемента
         for origin, item in tagged:
             base = item.strip()
             if not base or base == "<...>": continue
             nbase = norm(base)
 
             # 1) Банк. счёт
-            if not bank_account and starts_with_long_digits(nbase):
+            if not bank_account and starts_with_long_digits := starts_with_long_digits(nbase):
                 bank_account = base; stats["Bank"] += 1; continue
 
-            # 2) Документ
+            # 2) Документ (общий список)
+            #    (спец-док 'Корректировка долга' уже обработан выше)
             if not document and fuzzy_has_match(nbase, document_terms, thr=0.8):
                 document = base; stats["Document"] += 1; continue
 
@@ -1106,38 +1149,67 @@ def enrich_suppliers_semantics(
             if (category is None or str(category).strip() == "") and category_terms and fuzzy_has_match(nbase, category_terms, thr=0.75):
                 category = base; stats["Category"] += 1; continue
 
+            # на финальную проверку
             leftovers.append((origin, base))
 
-        # Partner/Supplier — только AnDT/AnCR без цифр
-        andt_names = [txt for (orig, txt) in leftovers if orig == "AnDT" and not contains_digits(norm(txt))]
-        ancr_names = [txt for (orig, txt) in leftovers if orig == "AnCR" and not contains_digits(norm(txt))]
+        # -------- ФИНАЛЬНОЕ распределение названий компаний --------
+        # Новое правило: «компанийность» = НЕ распознано и количество цифр <= 2
+        def company_candidates(items):
+            return [txt for txt in items if digits_count(norm(txt)) <= 2]
 
-        if dtcr == "Dt":
-            if not supplier and andt_names:
-                supplier = andt_names[0]; stats["Supplier"] += 1
-            if not partner  and ancr_names:
-                partner  = ancr_names[0]; stats["Partner"]  += 1
-        elif dtcr == "Cr":
-            if not partner  and andt_names:
-                partner  = andt_names[0]; stats["Partner"]  += 1
-            if not supplier and ancr_names:
-                supplier = ancr_names[0]; stats["Supplier"] += 1
+        # Из leftovers выделим кандидатов для AnDT/AnCR
+        andt_left = [txt for (orig, txt) in leftovers if orig == "AnDT"]
+        ancr_left = [txt for (orig, txt) in leftovers if orig == "AnCR"]
 
-        # убрать из leftovers то, что использовано как партнёра/поставщика
+        andt_names = company_candidates(andt_left)
+        ancr_names = company_candidates(ancr_left)
+
+        if is_recalc_doc:
+            # Особый режим перерасчёта долга:
+            #   AnCR -> Partner, AnDT -> Related Company (игнорируем DtCr)
+            if not partner and ancr_names:
+                partner = ancr_names[0]; stats["Partner"] += 1
+            if not related_company and andt_names:
+                related_company = andt_names[0]; stats["Related"] += 1
+        else:
+            # Обычный режим:
+            if dtcr == "Dt":
+                # Дт-строка: AnDT -> Supplier, AnCR -> Partner
+                if not supplier and andt_names:
+                    supplier = andt_names[0]; stats["Supplier"] += 1
+                if not partner and ancr_names:
+                    partner = ancr_names[0]; stats["Partner"] += 1
+            elif dtcr == "Cr":
+                # Кт-строка: AnDT -> Partner, AnCR -> Supplier
+                if not partner and andt_names:
+                    partner = andt_names[0]; stats["Partner"] += 1
+                if not supplier and ancr_names:
+                    supplier = ancr_names[0]; stats["Supplier"] += 1
+
+        # Уберём из leftovers то, что съедено как Partner/Supplier/Related Company
         consumed = set()
         if supplier:
-            consumed.add(("AnDT", supplier)) if dtcr == "Dt" else consumed.add(("AnCR", supplier))
+            consumed.add(("AnDT", supplier)) if dtcr == "Dt" and not is_recalc_doc else consumed.add(("AnCR", supplier))
         if partner:
-            consumed.add(("AnCR", partner)) if dtcr == "Dt" else consumed.add(("AnDT", partner))
+            consumed.add(("AnCR", partner)) if (dtcr == "Dt" and not is_recalc_doc) else consumed.add(("AnDT", partner))
+        if related_company:
+            consumed.add(("AnDT", related_company))
         temp_list = [txt for (orig, txt) in leftovers if (orig, txt) not in consumed]
 
+        # --- Нормализация Partner/Supplier ---
+        if partner is not None:
+            partner = normalize_company_fn(partner)
+        if supplier is not None:
+            supplier = normalize_company_fn(supplier)
+
         # запись
-        if partner is not None:      df.at[idx, "Partner"] = partner
-        if supplier is not None:     df.at[idx, "Supplier"] = supplier
-        if estate is not None:       df.at[idx, "Estate"] = estate
-        if contract is not None:     df.at[idx, "Contract"] = contract
-        if document is not None:     df.at[idx, "Document"] = document
-        if bank_account is not None: df.at[idx, "Bank Account"] = bank_account
+        if partner is not None:          df.at[idx, "Partner"] = partner
+        if supplier is not None:         df.at[idx, "Supplier"] = supplier
+        if related_company is not None:  df.at[idx, "Related Company"] = related_company
+        if estate is not None:           df.at[idx, "Estate"] = estate
+        if contract is not None:         df.at[idx, "Contract"] = contract
+        if document is not None:         df.at[idx, "Document"] = document
+        if bank_account is not None:     df.at[idx, "Bank Account"] = bank_account
         if category is not None and (pd.isna(row.get("Category")) or str(row.get("Category")).strip() == ""):
             df.at[idx, "Category"] = category
 
@@ -1146,21 +1218,25 @@ def enrich_suppliers_semantics(
         # прогресс
         if use_tqdm:
             if (idx % progress_each) == 0:
-                pbar.set_postfix(P=stats["Partner"], S=stats["Supplier"], Cat=stats["Category"],
-                                 Es=stats["Estate"], Ctr=stats["Contract"], Doc=stats["Document"], Bank=stats["Bank"])
+                pbar.set_postfix(P=stats["Partner"], S=stats["Supplier"], R=stats["Related"],
+                                 Cat=stats["Category"], Es=stats["Estate"], Ctr=stats["Contract"],
+                                 Doc=stats["Document"], Bank=stats["Bank"])
             pbar.update(1)
         elif show_progress and (idx % progress_each) == 0:
-            print(f"[{idx}/{n}] P={stats['Partner']} S={stats['Supplier']} Cat={stats['Category']} "
-                  f"Es={stats['Estate']} Ctr={stats['Contract']} Doc={stats['Document']} Bank={stats['Bank']}")
+            print(f"[{idx}/{n}] P={stats['Partner']} S={stats['Supplier']} R={stats['Related']} "
+                  f"Cat={stats['Category']} Es={stats['Estate']} Ctr={stats['Contract']} "
+                  f"Doc={stats['Document']} Bank={stats['Bank']}")
 
     if pbar is not None:
-        pbar.set_postfix(P=stats["Partner"], S=stats["Supplier"], Cat=stats["Category"],
-                         Es=stats["Estate"], Ctr=stats["Contract"], Doc=stats["Document"], Bank=stats["Bank"])
+        pbar.set_postfix(P=stats["Partner"], S=stats["Supplier"], R=stats["Related"],
+                         Cat=stats["Category"], Es=stats["Estate"], Ctr=stats["Contract"],
+                         Doc=stats["Document"], Bank=stats["Bank"])
         pbar.close()
 
     if show_progress and not use_tqdm:
-        print(f"[done {n}] P={stats['Partner']} S={stats['Supplier']} Cat={stats['Category']} "
-              f"Es={stats['Estate']} Ctr={stats['Contract']} Doc={stats['Document']} Bank={stats['Bank']}")
+        print(f"[done {n}] P={stats['Partner']} S={stats['Supplier']} R={stats['Related']} "
+              f"Cat={stats['Category']} Es={stats['Estate']} Ctr={stats['Contract']} "
+              f"Doc={stats['Document']} Bank={stats['Bank']}")
 
     return df
 
