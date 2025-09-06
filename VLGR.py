@@ -564,7 +564,7 @@ def parse_income_folder(root_main, root_income, parser_func):
 
 
 def normalize_company_name(name):
-    opf_list = ['АНО ДПО', 'ООО', 'ЗАО', 'ОАО', 'НПО', 'АО', 'ПАО', 'ФГБУ', 'УФССП', 'УФФССП', 'КПК', 'ОСФР', 'УФК', 'НО']
+    opf_list = ['АНО ДПО', 'ООО', 'ЗАО', 'ОАО', 'НПО', 'АО', 'ПАО', 'ФГБУ', 'УФССП', 'УФФССП', 'КПК', 'ОСФР', 'УФК', 'НО', 'МУП']
     opf_pattern = '|'.join(sorted(opf_list, key=len, reverse=True))
 
     # Убираем лишние символы, стандартизируем кавычки
