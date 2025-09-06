@@ -1129,7 +1129,7 @@ def enrich_suppliers_semantics(
             nbase = norm(base)
 
             # 1) Банк. счёт
-            if not bank_account and starts_with_long_digits := starts_with_long_digits(nbase):
+            if not bank_account and starts_with_long_digits(nbase):
                 bank_account = base; stats["Bank"] += 1; continue
 
             # 2) Документ (общий список)
