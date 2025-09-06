@@ -657,6 +657,10 @@ def normalize_company_names(val):
 
 
 
+
+
+
+
 import re, os, glob
 import pandas as pd
 from openpyxl import load_workbook
@@ -666,18 +670,20 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
     """
     Парсер карточек из каталога 'Поставщики услуг'.
 
-    Что делает:
-      • Берёт компанию из верхнего левого блока (A1:C4).
-      • Дату — из первого столбца каждой строки данных.
-      • Старт данных — первая строка ПОСЛЕ 'Сальдо на начало'.
-      • Финальная строка 'Итого' тоже берётся:
-          - там часто объединение: сумма «попадает» в ячейку счёта.
-          - аккуратно переносим эту сумму в Value.
-      • Формируем единый формат (long-образный на одну строку):
-          Date, Company, Doc, AnDT, AnCR, DtCr ∈ {'Dt','Cr'}, Счет, Value.
-        (Строки, где нет счёта — это в т.ч. «Итоги», храним как Счет=None.)
+    Логика по колонкам:
+      • Определяем столбцы по шапке: ищем блоки 'Дебет'/'Кредит' и подзаголовок 'Счет'.
+        Для каждого блока: AccountCol = колонка под словом 'Счет', SumCol = AccountCol + 1.
+      • Дата — из первого столбца.
+      • Doc / AnDT / AnCR — временно берём из столбцов 2,3,4 как есть.
+      • В каждой строке создаём до двух записей (Dt/Cr):
+          - DtCr ∈ {'Dt','Cr'}
+          - Счет = текст из AccountCol (НЕ конвертируем в число)
+          - Value = число из SumCol (конвертируем).
+        Если это строка 'Итого' и сумма «слилась» в AccountCol (а SumCol пуст), переносим её в Value,
+        а Счет = None.
     """
 
+    # --- утилиты ---
     def _cell_str(v):
         if v is None:
             return None
@@ -688,11 +694,7 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
         if x is None:
             return None
         if isinstance(x, (int, float)):
-            try:
-                # NaN -> None
-                return None if pd.isna(x) else float(x)
-            except Exception:
-                return None
+            return None if pd.isna(x) else float(x)
         s = str(x).replace('\xa0','').replace(' ','').replace(',','.')
         try:
             return float(s)
@@ -702,9 +704,7 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
     def _to_datetime(v):
         if v is None or (isinstance(v, float) and pd.isna(v)):
             return None
-        # поддержка excel-дат, строк вида '01.02.2025', '2025-02-01', и т.п.
-        dt = pd.to_datetime(v, dayfirst=True, errors='coerce')
-        return dt
+        return pd.to_datetime(v, dayfirst=True, errors='coerce')
 
     def _find_company(ws):
         for r in range(1, min(ws.max_row, 4)+1):
@@ -717,104 +717,145 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
 
     def _find_start_row(ws):
         max_r = min(ws.max_row, 100)
-        max_c = min(ws.max_column, 12)
+        max_c = min(ws.max_column, 20)
         for r in range(1, max_r+1):
             for c in range(1, max_c+1):
                 v = _cell_str(ws.cell(row=r, column=c).value)
                 if v and 'сальдо на начало' in v.lower():
                     return r + 1
-        return 10  # безопасный дефолт
+        return 10
 
+    def _detect_account_columns(ws, start_row):
+        """
+        Возвращает кортеж (dt_acc_col, dt_sum_col, cr_acc_col, cr_sum_col)
+        Колонки — 1-based.
+        Ищем 'Счет' под зонтиком 'Дебет' / 'Кредит' (или 'Дт' / 'Кт').
+        """
+        max_c = min(ws.max_column, 50)
+        header_rows = max(1, start_row - 1)
+
+        # Считываем «шапку»
+        H = [[_cell_str(ws.cell(row=r, column=c).value) for c in range(1, max_c+1)]
+             for r in range(1, header_rows+1)]
+
+        def _has_token_near(r, c, token_regex):
+            # Ищем токен в невысоком «окне» вокруг (r,c), вверх на 3 строки, влево/вправо на 3 колонки
+            r0 = max(0, r-3)
+            c0 = max(0, c-3)
+            r1 = r-1
+            c1 = min(max_c-1, c+3)
+            for rr in range(r0, r1+1):
+                for cc in range(c0, c1+1):
+                    val = H[rr][cc]
+                    if val and re.search(token_regex, val, flags=re.I):
+                        return True
+            return False
+
+        dt_acc_col = cr_acc_col = None
+
+        # Ищем клетки с 'Счет' и маркируем им принадлежность по окружению
+        for r in range(len(H)):
+            for c in range(max_c):
+                val = H[r][c]
+                if not val:
+                    continue
+                if 'счет' in val.lower():
+                    is_dt = _has_token_near(r, c, r'(дебет|^дт\b|[^а-я]дт[^а-я])')
+                    is_cr = _has_token_near(r, c, r'(кредит|^кт\b|[^а-я]кт[^а-я])')
+                    if is_dt and dt_acc_col is None:
+                        dt_acc_col = c + 1  # -> 1-based
+                    if is_cr and cr_acc_col is None:
+                        cr_acc_col = c + 1
+
+        # Фоллбэк (на случай «экзотики»)
+        if dt_acc_col is None:
+            dt_acc_col = 5
+        if cr_acc_col is None:
+            cr_acc_col = 7
+
+        return dt_acc_col, dt_acc_col + 1, cr_acc_col, cr_acc_col + 1
+
+    # --- основа ---
     wb = load_workbook(file_path, data_only=True)
     ws = wb.active
 
     company = _find_company(ws)
     start_row = _find_start_row(ws)
+    dt_acc_col, dt_sum_col, cr_acc_col, cr_sum_col = _detect_account_columns(ws, start_row)
 
     out_rows = []
     max_r = ws.max_row
 
     for r in range(start_row, max_r+1):
-        # 1..8 по описанию: 1=Date; 2,3,4 -> Doc/AnDT/AnCR; 5-6 Dt; 7-8 Cr
-        c1 = ws.cell(row=r, column=1).value  # Date
-        c2 = ws.cell(row=r, column=2).value  # Doc
-        c3 = ws.cell(row=r, column=3).value  # AnDT
-        c4 = ws.cell(row=r, column=4).value  # AnCR
-        c5 = ws.cell(row=r, column=5).value  # Dt account (или сумма в объединении)
-        c6 = ws.cell(row=r, column=6).value  # Dt sum
-        c7 = ws.cell(row=r, column=7).value  # Cr account (или сумма в объединении)
-        c8 = ws.cell(row=r, column=8).value  # Cr sum
+        # считываем основные ячейки
+        c1 = ws.cell(row=r, column=1).value   # Date
+        c2 = ws.cell(row=r, column=2).value   # Doc
+        c3 = ws.cell(row=r, column=3).value   # AnDT
+        c4 = ws.cell(row=r, column=4).value   # AnCR
 
-        # Пропускаем полностью пустые
-        if all(_cell_str(v) is None for v in [c1,c2,c3,c4,c5,c6,c7,c8]):
+        dt_acc_cell = ws.cell(row=r, column=dt_acc_col).value
+        dt_sum_cell = ws.cell(row=r, column=dt_sum_col).value
+        cr_acc_cell = ws.cell(row=r, column=cr_acc_col).value
+        cr_sum_cell = ws.cell(row=r, column=cr_sum_col).value
+
+        # Пропускаем полностью пустые строки
+        if all(_cell_str(v) is None for v in [c1,c2,c3,c4,dt_acc_cell,dt_sum_cell,cr_acc_cell,cr_sum_cell]):
             continue
 
-        # Дата
+        # дата и временные поля
         dt = _to_datetime(c1)
-        if pd.isna(dt):
-            # Если это не дата — возможно, служебные/пустые хвосты
-            # Но «Итоги» обычно содержат суммы — оставим обработку дальше,
-            # просто dt будет NaT и позже станет None (без времени).
-            pass
-
-        # --- ДЕБЕТ ---
-        # сумма может быть в c6 (штатно) ИЛИ из-за объединения — прямо в c5
-        dt_sum = _to_number(c6)
-        dt_sum_merged = _to_number(c5) if dt_sum is None else None
-        # если сумма «утонула» в ячейке счёта — вытаскиваем
-        if dt_sum is None and dt_sum_merged is not None:
-            dt_sum = dt_sum_merged
-            dt_acc = None
-        else:
-            # штатно: счёт в c5, если это не число
-            dt_acc = _cell_str(c5) if _to_number(c5) is None else None
-
-        # --- КРЕДИТ ---
-        cr_sum = _to_number(c8)
-        cr_sum_merged = _to_number(c7) if cr_sum is None else None
-        if cr_sum is None and cr_sum_merged is not None:
-            cr_sum = cr_sum_merged
-            cr_acc = None
-        else:
-            cr_acc = _cell_str(c7) if _to_number(c7) is None else None
-
+        date_out = None if (dt is None or pd.isna(dt)) else dt.date()
         doc  = _cell_str(c2)
         andt = _cell_str(c3)
         ancr = _cell_str(c4)
 
-        # По вашему правилу «в строке либо Дт, либо Кт»
-        # Но на «Итого» иногда могут встретиться обе суммы.
-        # Делаем универсально: создаём 0..2 строк в long-стиле.
-        def _append(side, acc, val):
+        # --- ДЕБЕТ ---
+        dt_val = _to_number(dt_sum_cell)
+        dt_acc_text = _cell_str(dt_acc_cell)
+
+        # Если сумма слева (итог с объединением): правый столбец пуст, левый содержит число
+        if dt_val is None and _to_number(dt_acc_cell) is not None and _cell_str(dt_sum_cell) is None:
+            dt_val = _to_number(dt_acc_cell)
+            dt_acc_text = None  # как просили: «Итоги» без номера счета
+
+        if dt_val is not None:
             out_rows.append({
-                'Date'   : None if pd.isna(dt) else dt.date(),
+                'Date'   : date_out,
                 'Company': company,
                 'Doc'    : doc,
                 'AnDT'   : andt,
                 'AnCR'   : ancr,
-                'DtCr'   : side,         # 'Dt' или 'Cr'
-                'Счет'   : acc,          # None для «Итога»
-                'Value'  : val           # сумма
+                'DtCr'   : 'Dt',
+                'Счет'   : dt_acc_text,   # Храним строго как текст (не число!)
+                'Value'  : dt_val
             })
 
-        added = False
-        if dt_sum is not None:
-            _append('Dt', dt_acc, dt_sum)
-            added = True
-        if cr_sum is not None:
-            _append('Cr', cr_acc, cr_sum)
-            added = True
+        # --- КРЕДИТ ---
+        cr_val = _to_number(cr_sum_cell)
+        cr_acc_text = _cell_str(cr_acc_cell)
 
-        # Если обе суммы пустые, но строка «не пустая» — пропустим (мусор/формат)
-        if not added:
-            continue
+        if cr_val is None and _to_number(cr_acc_cell) is not None and _cell_str(cr_sum_cell) is None:
+            cr_val = _to_number(cr_acc_cell)
+            cr_acc_text = None
+
+        if cr_val is not None:
+            out_rows.append({
+                'Date'   : date_out,
+                'Company': company,
+                'Doc'    : doc,
+                'AnDT'   : andt,
+                'AnCR'   : ancr,
+                'DtCr'   : 'Cr',
+                'Счет'   : cr_acc_text,
+                'Value'  : cr_val
+            })
 
     if not out_rows:
         return pd.DataFrame(columns=['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value'])
 
     df = pd.DataFrame(out_rows)
 
-    # Нормализация текстов
+    # чистим пробелы в текстах
     def _clean_text(x):
         if x is None or (isinstance(x, float) and pd.isna(x)):
             return None
@@ -825,7 +866,7 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].apply(_clean_text)
 
-    # Порядок столбцов по ТЗ
+    # финальный порядок
     cols = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value']
     for c in cols:
         if c not in df.columns:
@@ -833,53 +874,6 @@ def excel_parser_SUPPLIERS(file_path: str) -> pd.DataFrame:
     df = df[cols]
 
     return df
-
-
-def parse_suppliers_folder(root_main: str,
-                           root_suppliers: str = 'Поставщики услуг',
-                           parser_func = None) -> pd.DataFrame:
-    """
-    Рекурсивно парсит все .xlsx из подкаталога 'Поставщики услуг' и объединяет.
-    Возвращает столбцы: Date, Company, Doc, AnDT, AnCR, DtCr, Счет, Value, SOURCE_FILE
-    """
-    if parser_func is None:
-        parser_func = excel_parser_SUPPLIERS
-
-    base_dir = os.path.join(root_main, root_suppliers)
-    files = glob.glob(os.path.join(base_dir, '**', '*.xlsx'), recursive=True)
-    print(f'Найдено файлов: {len(files)}')
-
-    frames = []
-    for i in trange(len(files), desc="Поставщики услуг: парсинг", unit="файл"):
-        f = files[i]
-        try:
-            df = parser_func(f)
-            df['SOURCE_FILE'] = os.path.relpath(f, root_main)
-            frames.append(df)
-        except Exception as e:
-            print(f'Ошибка {f}: {e}')
-
-    if not frames:
-        return pd.DataFrame(columns=['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE'])
-
-    out = pd.concat(frames, ignore_index=True)
-
-    # финальная раскладка
-    desired = ['Date','Company','Doc','AnDT','AnCR','DtCr','Счет','Value','SOURCE_FILE']
-    other = [c for c in out.columns if c not in desired]
-    out = out[desired + other]
-
-    return out
-
-
-
-
-
-
-
-
-
-
 
 
 
